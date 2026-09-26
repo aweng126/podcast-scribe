@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "video-to-markdown"
+version = "0.1.0"
+description = "Speaker-aware podcast transcripts, document exports and a static reading site"
+requires-python = ">=3.10"
+dependencies = ["yt-dlp>=2026.8.19", "reportlab>=4.4", "imageio-ffmpeg>=0.6", "openai>=2.15"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pymupdf>=1.24"]
+
+[project.scripts]
+vtm = "video_to_markdown.cli:main"
+
+[tool.setuptools.package-data]
+video_to_markdown = ["assets/*"]
+
+[tool.setuptools.packages.find]
+include = ["video_to_markdown*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
