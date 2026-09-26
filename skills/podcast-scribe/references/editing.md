@@ -1,17 +1,17 @@
 # 长文分批整理
 
-这些命令只在本地读写 JSON，不调用文本模型。由运行 Skill 的 Agent 整理文字、核对来源、记录各批笔记，再依据全篇笔记生成摘要与章节。先按 [工作流程](workflow.md) 确定绝对脚本入口 `$PS_SKILL_ROOT/scripts/podcast_scribe.py`；使用已有 Python 3.10+ 即可。
+这些命令只在本地读写 JSON，不调用文本模型。由运行 Skill 的 Agent 整理文字、核对来源、记录各批笔记，再依据全篇笔记生成摘要与章节。按 [工作流程](workflow.md) 使用 `bash "$PS_SKILL_ROOT/scripts/run.sh"`，由入口选择解释器。以下示例的文稿路径和批次文件名由 Agent 按实际单集替换，无需用户填写。
 
 ## 读取进度和正文
 
 ```bash
-python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" status data/episode.json
-python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" batch data/episode.json --max-chars 6000 --output output/batch-001.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" status data/my-episode/episode.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" batch data/my-episode/episode.json --output output/my-episode/batch-001.json
 ```
 
 `status` 仅给出修订号、各校对状态数量、剩余段落与字符数、未知说话人数量和下一待处理 ID。`edited`、`needs_review`、兼容的旧状态及缺失状态均计为未校对；只有明确的 `reviewed` 被跳过。逐段全部已核对也不会自动确认整集复核标记。
 
-`batch` 的标准输出与保存文件相同。`--max-chars` 限制完整紧凑 JSON 的字符数，包括元信息和换行；字符数不是 token 数。主要字段：
+`batch` 默认每批 6000 字符，标准输出与保存文件相同。`--max-chars` 可调整完整紧凑 JSON 的字符上限，包括元信息和换行；字符数不是 token 数。主要字段：
 
 - `targets`：本批需要处理的完整段落，包含稳定 ID、时间戳、说话人 ID、当前正文和校对状态。
 - `context.before` / `context.after`：相邻段落的只读摘录，默认各最多 300 字符；裁剪时 `truncated=true`。预算不足时会进一步缩短，完全省略的方向列在 `context_omitted`。
@@ -35,8 +35,8 @@ python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" batch data/episode.json --max
 ```
 
 ```bash
-python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" edit data/episode.json --edits output/edits-001.json --batch output/batch-001.json
-python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" batch data/episode.json --after seg-00012 --max-chars 6000 --output output/batch-002.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" edit data/my-episode/episode.json --edits output/my-episode/edits-001.json --batch output/my-episode/batch-001.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" batch data/my-episode/episode.json --after seg-00012 --output output/my-episode/batch-002.json
 ```
 
 第二条命令的 `seg-00012` 须替换为上一批实际返回的 `next_after`。每批使用新的输出文件名；已有批次文件不会被覆盖。整理阶段即使段落仍是 `edited`，也可以借助该游标继续读后文，保留每批笔记并核对 ID 覆盖。只有实际核对过的段落才提交 `review_status: "reviewed"`；无需重复其正文。
@@ -48,7 +48,7 @@ python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" batch data/episode.json --aft
 ## 按需读取原文与全篇收尾
 
 ```bash
-python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" batch data/episode.json --raw --include-reviewed --after seg-00012 --max-chars 6000
+bash "$PS_SKILL_ROOT/scripts/run.sh" batch data/my-episode/episode.json --raw --include-reviewed --after seg-00012
 ```
 
 `--raw` 以原始 `raw_text` 替代当前正文视图，不同时发送两份全文。按需回看疑点对应范围，与整理稿及原音频核对；不要因此把原始转写当成已核对事实。省略 `--after` 可从开头读取。

@@ -1,4 +1,4 @@
 interface:
   display_name: "听稿 · Podcast Scribe"
-  short_description: "把 B站播客整理为区分人物的完整文稿，导出 Markdown、PDF 与系列阅读页"
-  default_prompt: "使用 $podcast-scribe 将这个 B站视频整理为带说话人、时间戳、摘要和章节的完整文稿，并导出 Markdown、PDF 与阅读页预览。"
+  short_description: "提供播客链接或文件，整理为区分人物的完整文稿并导出 Markdown 和 PDF"
+  default_prompt: "使用 $podcast-scribe 处理这个播客链接或文件。"

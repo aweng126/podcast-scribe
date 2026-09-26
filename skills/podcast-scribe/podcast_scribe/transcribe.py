@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -209,6 +210,23 @@ def _metadata(metadata: dict | None, manifest: dict, work: Path, rows: list[dict
           file=sys.stderr)
 
 
+@contextmanager
+def _cache_lock(work: Path):
+    """Serialize one content/configuration cache across all output destinations."""
+    import fcntl  # Supported runtime: macOS, Linux and WSL.
+    work.mkdir(parents=True, exist_ok=True)
+    # Keep this inode after unlock: unlinking could split competing lock holders.
+    with (work / ".transcribe.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ContentError(f"相同音频与配置的转写正在运行：{work}；本次未发送转写请求，请等待完成后重跑原命令复用缓存。") from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 def transcribe_audio(source: Path, cache_dir: Path, *, language: str = "zh",
                      metadata: dict | None = None) -> tuple[list[dict], list[dict]]:
     source, cache_dir = Path(source), Path(cache_dir)
@@ -225,6 +243,13 @@ def transcribe_audio(source: Path, cache_dir: Path, *, language: str = "zh",
     source_hash, config = _sha256(source), _configuration(language)
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
     work = cache_dir / hashlib.sha256(f"{source_hash}:{config_hash}".encode()).hexdigest()
+    with _cache_lock(work):
+        return _transcribe_work(source, work, source_hash, config, config_hash, metadata)
+
+
+def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
+                     config_hash: str, metadata: dict | None) -> tuple[list[dict], list[dict]]:
+    language = config["language"]
     manifest = _load_manifest(work, source_hash, config)
     final_path = work / "transcription.json"
     if manifest and manifest.get("status") == "complete" and final_path.is_file():

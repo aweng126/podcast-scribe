@@ -21,35 +21,30 @@
 npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 ```
 
-Skill 安装到当前项目的 `.agents/skills/podcast-scribe/`。首次使用音频转写或 PDF 时，初始化 Python 运行环境：
+Skill 安装到当前项目的 `.agents/skills/podcast-scribe/`。首次运行时，Agent 会检查并按需初始化 Python 依赖，之后复用已有环境；无需每次手动选择解释器。
 
-```sh
-PS_SKILL_ROOT="$PWD/.agents/skills/podcast-scribe"
-python3 -m venv "$PS_SKILL_ROOT/.venv"
-"$PS_SKILL_ROOT/.venv/bin/python" -m pip install -e "$PS_SKILL_ROOT"
-```
-
-仅处理已有转写、导出 Markdown、生成离线页面和分享文件时，无需第三方 Python 依赖。全局安装与手动安装见[安装与运行](skills/podcast-scribe/references/workflow.md#安装与首次调用)。
+仅处理已有转写、导出 Markdown、生成离线页面和分享文件时，无需第三方 Python 依赖。源码仓库中可直接使用；全局安装与手动安装见[安装与运行](skills/podcast-scribe/references/workflow.md#安装与首次调用)。
 
 - **音视频转写**：需要在运行环境中配置 `OPENAI_API_KEY`，音频会发送到 OpenAI API，并产生接口费用。导入已有转写无需 API。
 - **中文 PDF**：需要可嵌入的中文 TrueType 字体，可通过 `PODCAST_SCRIBE_FONT` 指定字体路径。
 
 ## 使用
 
-在保存文稿的任务工作区中启动 Codex，通过 `$podcast-scribe` 调用：
+在保存文稿的任务工作区中启动 Codex，只需提供 Skill 名称和链接：
 
 ```text
-使用 $podcast-scribe 将这个 B站视频整理为完整文稿，生成摘要和章节，导出 Markdown 和 PDF：<视频链接>
+使用 $podcast-scribe https://www.bilibili.com/video/BV1XNtJ6UEmm
 ```
 
 或使用已有转写：
 
 ```text
-使用 $podcast-scribe 整理 ./input.json，原节目链接为 <来源链接>。
-保留完整对话、说话人与时间戳，生成摘要、章节和 Markdown。
+使用 $podcast-scribe ./input.json
 ```
 
-音频缓存、文稿与导出文件保存在任务工作区的 `data/` 和 `output/`，也可指定输出路径。需要离线阅读页面时，另外提出“生成本地阅读页预览”。
+默认按中文阅读习惯整理并保留原意，保留完整对话、说话人与时间戳，生成摘要、章节、Markdown 和 PDF。文稿保存在 `data/<id>/episode.json`，导出文件保存在 `output/<id>/`；已有同一输入的文稿会继续整理，未完成的校对会如实标注。
+
+无需另外指定格式、路径、分片或解释器。只有需要调整默认行为时才补充要求，例如“只导出 Markdown”或“生成本地阅读页预览”。
 
 四小时等长节目使用相同入口，失败后可复用成功分片继续处理；跨片说话人对应仍须校对。机制与限制见[长音视频](skills/podcast-scribe/references/long-audio.md)，减少上下文开销的流程见[分批整理](skills/podcast-scribe/references/editing.md)。
 

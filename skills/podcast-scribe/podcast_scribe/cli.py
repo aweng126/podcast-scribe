@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-from .model import ContentError, apply_edits, load_episode, new_episode, safe_id, save_episode, utc_now, validate_episode, write_json
+from .model import ContentError, apply_edits, load_episode, new_episode, save_episode, utc_now, validate_episode, write_json
 
 
 def _read(path):
@@ -20,20 +20,34 @@ def _series(parser):
 
 
 def _output(parser):
-    parser.add_argument("--output", required=True, type=Path, help="单集 JSON 文件路径；存在时不会覆盖")
+    parser.add_argument("--output", type=Path, help="默认 data/<来源 ID>/episode.json；存在时不会覆盖")
 
 
 def _new_destination(path):
-    if path.exists():
+    if path.exists() or path.is_symlink():
         raise ContentError(f"文件已存在，已保留人工修改：{path}。请使用 edit/export 或指定新的输出路径。")
 
 
 def _save_new(args, metadata, segments, speakers):
+    from .defaults import save_new_episode
     ep = new_episode(metadata, segments, speakers, series_id=args.series_id, series_title=args.series_title)
+    if "input_identity" in metadata:
+        ep["input_identity"] = metadata["input_identity"]
     if getattr(args, "demo", False):
         ep["is_demo"] = True
-    save_episode(args.output, ep)
+    save_new_episode(args.output, ep)
     print(args.output.resolve())
+
+
+def _resume_default(args, identity, *, default_output: bool) -> bool:
+    if default_output:
+        from .defaults import existing_report
+        report = existing_report(args.output, identity, args)
+        if report:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return True
+    _new_destination(args.output)
+    return False
 
 
 def parser():
@@ -61,8 +75,8 @@ def parser():
     _series(p); _output(p)
     p = sub.add_parser("import", help="导入 JSON/SRT/VTT；无人物标签时明确标为待确认")
     p.add_argument("file", type=Path)
-    p.add_argument("--id", required=True)
-    p.add_argument("--title", required=True)
+    p.add_argument("--id")
+    p.add_argument("--title")
     p.add_argument("--source-url", default="")
     p.add_argument("--demo", action="store_true", help="标为自制演示，只允许预览")
     _series(p); _output(p)
@@ -83,7 +97,7 @@ def parser():
     p = sub.add_parser("export", help="从单集 JSON 导出文稿")
     p.add_argument("episode", type=Path)
     p.add_argument("--formats", nargs="+", choices=["markdown", "pdf"], default=["markdown", "pdf"])
-    p.add_argument("--output-dir", type=Path, default=Path("output/exports"))
+    p.add_argument("--output-dir", type=Path, help="默认 output/<单集 ID>/")
     p = sub.add_parser("publish", help="将校对完成的单集标为已发布；不执行公网部署")
     p.add_argument("episode", type=Path)
     p = sub.add_parser("share", help="生成公开投稿 JSON 与 Issue 表单链接；不自动上传或发布")
@@ -115,34 +129,58 @@ def run(args):
             write_json(args.output, metadata)
         print(json.dumps(metadata, ensure_ascii=False, indent=2))
     elif args.command == "ingest":
+        from .defaults import destination_lock, resolved_video_target, video_target
         from .sources import fetch_audio, inspect_source
         from .transcribe import transcribe_audio
-        _new_destination(args.output)
-        metadata = inspect_source(args.url)
-        work = args.cache / safe_id(metadata["id"])
-        write_json(work / "metadata.json", metadata)
-        audio = fetch_audio(args.url, work)
-        audio_metadata = {}
-        segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language,
-                                             metadata=audio_metadata)
-        metadata["duration_seconds"] = max(metadata.get("duration_seconds") or 0,
-                                           audio_metadata.get("duration_seconds") or 0)
-        _save_new(args, metadata, segments, speakers)
-    elif args.command in ("transcribe", "import"):
-        _new_destination(args.output)
-        audio_metadata = {}
-        if args.command == "transcribe":
-            from .transcribe import transcribe_audio
-            segments, speakers = transcribe_audio(args.file, args.cache / "asr", language=args.language,
+        default_output = args.output is None
+        if not default_output:
+            _new_destination(args.output)
+        target = video_target(args.url)
+        if target is None:
+            metadata = inspect_source(args.url)
+            target = resolved_video_target(args.url, metadata)
+        args.output = args.output or Path("data") / target["id"] / "episode.json"
+        with destination_lock(args.output):
+            if _resume_default(args, target["identity"], default_output=default_output):
+                return 0
+            metadata = inspect_source(target["url"])
+            resolved_video_target(target["url"], metadata)
+            metadata["id"] = target["id"]
+            metadata["source"].update(url=target["url"], video_id=target["identity"]["video_id"])
+            metadata["input_identity"] = target["identity"]
+            work = args.cache / target["id"]
+            write_json(work / "metadata.json", metadata)
+            audio = fetch_audio(target["url"], work)
+            audio_metadata = {}
+            segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language,
                                                  metadata=audio_metadata)
-        else:
-            from .transcripts import read_transcript
-            segments, speakers = read_transcript(args.file)
-        metadata = {"id": args.id or args.file.stem, "title": args.title or args.file.stem,
-                    "duration_seconds": audio_metadata.get("duration_seconds", 0),
-                    "source": {"platform": "bilibili" if "bilibili.com" in args.source_url else "local",
-                               "url": args.source_url, "author": ""}}
-        _save_new(args, metadata, segments, speakers)
+            metadata["duration_seconds"] = max(metadata.get("duration_seconds") or 0,
+                                               audio_metadata.get("duration_seconds") or 0)
+            _save_new(args, metadata, segments, speakers)
+    elif args.command in ("transcribe", "import"):
+        from .defaults import destination_lock, local_target
+        default_output = args.output is None
+        if not default_output:
+            _new_destination(args.output)
+        target = local_target(args.file, args.command, ident=args.id, source_url=args.source_url)
+        args.output = args.output or Path("data") / target["id"] / "episode.json"
+        with destination_lock(args.output):
+            if _resume_default(args, target["identity"], default_output=default_output):
+                return 0
+            audio_metadata = {}
+            if args.command == "transcribe":
+                from .transcribe import transcribe_audio
+                segments, speakers = transcribe_audio(args.file, args.cache / "asr", language=args.language,
+                                                     metadata=audio_metadata)
+            else:
+                from .transcripts import read_transcript
+                segments, speakers = read_transcript(args.file)
+            metadata = {"id": target["id"], "title": args.title or target["title"],
+                        "duration_seconds": audio_metadata.get("duration_seconds", 0),
+                        "input_identity": target["identity"],
+                        "source": {"platform": "bilibili" if "bilibili.com" in target["source_url"] else "local",
+                                   "url": target["source_url"], "author": ""}}
+            _save_new(args, metadata, segments, speakers)
     elif args.command == "status":
         from .editing import compact_json, editing_status
         print(compact_json(editing_status(load_episode(args.episode))), end="")
@@ -172,7 +210,7 @@ def run(args):
     elif args.command == "export":
         from .exporters import export_episode
         ep = load_episode(args.episode)
-        paths = export_episode(ep, args.output_dir, args.formats)
+        paths = export_episode(ep, args.output_dir or Path("output") / ep["id"], args.formats)
         ep.setdefault("artifacts", {}).update({key: str(path.resolve()) for key, path in paths.items()})
         save_episode(args.episode, ep)
         print(json.dumps({key: str(path.resolve()) for key, path in paths.items()}, ensure_ascii=False, indent=2))
@@ -222,9 +260,13 @@ def run(args):
 
 
 def main(argv=None):
+    from .defaults import SourceConflict
     args = parser().parse_args(argv)
     try:
         return run(args) or 0
+    except SourceConflict as exc:
+        print(json.dumps(exc.report, ensure_ascii=False, indent=2))
+        return 2
     except (ContentError, OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2

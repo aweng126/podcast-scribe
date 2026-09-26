@@ -17,11 +17,10 @@ npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 在 Codex 中调用，例如：
 
 ```text
-使用 $podcast-scribe 整理 ./input.json，原节目链接是 <来源链接>。
-保留完整对话、说话人与时间戳，生成摘要、章节和 Markdown。
+使用 $podcast-scribe ./input.json
 ```
 
-也可将输入换成 B站链接或本地音视频。得到本地单集 JSON 和 Markdown 后检查全文；离线页面仅在需要时另外请求生成。
+也可将输入换成 B站链接或本地音视频。默认生成完整文稿、摘要、章节、Markdown 和 PDF；得到本地文件后检查全文。离线页面仅在需要时另外请求生成。
 
 ### 2. 完成校对
 
@@ -123,7 +122,7 @@ https://github.com/<你的账号>/<你的仓库>/releases/download/share-v1/my-e
 
 ```sh
 PS_SKILL_ROOT="$PWD/.agents/skills/podcast-scribe"
-python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" share data/my-episode/episode.json --attribution '公开署名' --confirm-public
+bash "$PS_SKILL_ROOT/scripts/run.sh" share data/my-episode/episode.json --attribution '公开署名' --confirm-public
 ```
 
 全局安装时将 `PS_SKILL_ROOT` 换成实际安装路径。`--confirm-public` 表示用户选择准备公开分享，不表示已经投稿或获准收录。命令不联网、不打开浏览器、不创建 Issue，也不修改本地单集。
@@ -131,7 +130,7 @@ python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" share data/my-episode/episode
 已有同名输出不会覆盖。修订并完成校对后，指定新文件：
 
 ```sh
-python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" share data/my-episode/episode.json --attribution '公开署名' --confirm-public --output output/share/my-episode-v2.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" share data/my-episode/episode.json --attribution '公开署名' --confirm-public --output output/share/my-episode-v2.json
 ```
 
 Agent 在交付本次任务的本地文件后按上述规则邀请一次，只处理用户同意公开的内容。用户接受邀请且校对完成后准备投稿材料；署名缺失时只询问署名，不猜测姓名或重复确认已有授权。只生成文件时报告“投稿文件已准备”；获得实际 Issue URL 后才能报告“已投稿”，确认 Pages 部署成功后才能报告“已上线”。收到撤稿请求时说明上述当前流程，不声称关闭 Issue 或修改本地 `status` 已完成下线。

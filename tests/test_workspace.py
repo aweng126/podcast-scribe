@@ -48,7 +48,7 @@ def test_complete_offline_workflow_in_separate_workspace(tmp_path):
     assert [s["raw_text"] for s in episode["segments"]] == [s["text"] for s in rows]
     assert [(s["start"], s["end"]) for s in episode["segments"]] == [(0, 4), (4, 8)]
     assert (tmp_path / "data/demo/history/workspace-demo-r1.json").is_file()
-    md = (tmp_path / "output/exports/workspace-demo.md").read_text(encoding="utf-8")
+    md = (tmp_path / "output/workspace-demo/workspace-demo.md").read_text(encoding="utf-8")
     assert "我们只观察了十二个样本。" in md and "不能据此证明对所有人有效。" in md
     assert "说话人 1" in md and "说话人 2" in md
     page = (tmp_path / "output/preview/index.html").read_text(encoding="utf-8")

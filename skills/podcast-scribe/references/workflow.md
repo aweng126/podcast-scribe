@@ -1,74 +1,59 @@
 # 听稿安装与运行
 
-首批目标环境为支持本地脚本执行的 Codex CLI / IDE，使用 Python 3.10+ 和 macOS / Linux 的 POSIX shell。Windows 可在 WSL 中采用同样的命令；原生 PowerShell 流程尚未验证。其他 Agent 可读取同一份 SKILL.md，但需自行确认其 Skill 发现机制和脚本执行权限。
+支持可执行本地脚本的 Codex CLI / IDE，需要 Python 3.10+，以下命令适用于 macOS / Linux。Windows 可在 WSL 中采用同样的命令；原生 PowerShell 尚未验证。其他 Agent 需确认其 Skill 发现机制和脚本执行权限。
 
 ## 安装与首次调用
 
-推荐在任务工作区通过 [Skills CLI](https://github.com/vercel-labs/skills) 安装，需要 Node.js/npm：
+在任务工作区通过 [Skills CLI](https://github.com/vercel-labs/skills) 安装，需要 Node.js/npm：
 
 ```sh
 npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
-PS_SKILL_ROOT="$PWD/.agents/skills/podcast-scribe"
 ```
 
-该命令从 GitHub 安装 Skill 及配套文件，无需本项目发布 npm 包。`npx` 不安装 Python 依赖。需要音频转写或 PDF 时继续初始化：
+该命令从 GitHub 安装 Skill 及配套文件，无需本项目发布 npm 包。`npx` 不安装 Python 依赖；首次运行时，Agent 会检查能力并按需初始化或复用环境，用户无需指定解释器或逐项安装依赖。
+
+音频转写需要通过运行环境或宿主密钥设置提供 `OPENAI_API_KEY`，不要把密钥粘贴到聊天、命令、文稿或 Git。仅处理已有转写并输出 Markdown、阅读站或分享文件时，无需 API 或第三方 Python 依赖。
+
+随后在任务工作区启动 Codex：
+
+> 使用 $podcast-scribe https://www.bilibili.com/video/BV1XNtJ6UEmm
+
+已有转写或本地音视频直接换成文件路径：
+
+> 使用 $podcast-scribe ./input.json
+
+默认保留完整对话、说话人与时间戳，按中文阅读习惯整理并保留原意，生成摘要、章节、Markdown 和 PDF。无需用户设置输出路径、解释器或长音频分片。仅有不同需求时补充，例如“只导出 Markdown”。整理与来源校对由宿主 Agent 完成，CLI 不会另外调用文本模型润色。
+
+需要跨项目使用时，安装命令加 `-g`。也可克隆仓库后将完整的 `skills/podcast-scribe/` 复制到宿主的用户 Skill 目录，不能只复制 SKILL.md。在源码仓库工作的用户同样只需提供 Skill 名称和链接，无需再次安装。Skill 未出现在宿主列表时重启宿主；发现位置见 [Codex 官方 Skill 文档](https://learn.chatgpt.com/docs/build-skills)。
+
+## Agent 的运行入口
+
+以下命令由 Agent 执行。`PS_SKILL_ROOT` 由 Agent 按本文件所在的 Skill 安装目录设置为绝对路径，用户无需设置；源码仓库中的位置是 `skills/podcast-scribe/`。标准入口为：
 
 ```sh
-python3 -m venv "$PS_SKILL_ROOT/.venv"
-PS_PYTHON="$PS_SKILL_ROOT/.venv/bin/python"
-"$PS_PYTHON" -m pip install -e "$PS_SKILL_ROOT"
+bash "$PS_SKILL_ROOT/scripts/run.sh" --help
 ```
 
-仅使用已有转写、Markdown 和阅读站时，可跳过环境初始化，设置 `PS_PYTHON=python3`，使用同一绝对脚本入口。
-
-需要跨项目使用时，可给安装命令加 `-g`，并将 `PS_SKILL_ROOT` 设为安装器输出的 Skill 路径。更新或重新安装可能替换 Skill 目录，届时重新创建 Python 环境；文稿和缓存应始终保留在任务工作区。
-
-也可不使用 npm，克隆仓库后将完整的 `skills/podcast-scribe/` 目录复制到 Codex 的用户 Skill 目录，不能只复制 SKILL.md。以下命令在目标不存在时复制文件，目标已存在时复用原安装：
+`run.sh` 自动选择 Python 3.10+ 与已有虚拟环境；普通命令不会自行联网安装。需要音频转写或 PDF 的依赖、且现有环境不满足时，由 Agent 执行：
 
 ```sh
-PS_SKILL_ROOT="$HOME/.agents/skills/podcast-scribe"
-mkdir -p "$HOME/.agents/skills"
-git clone https://github.com/aweng126/podcast-scribe.git podcast-scribe-source
-if [ ! -e "$PS_SKILL_ROOT" ]; then
-  cp -R podcast-scribe-source/skills/podcast-scribe "$PS_SKILL_ROOT"
-fi
-python3 -m venv "$PS_SKILL_ROOT/.venv"
-PS_PYTHON="$PS_SKILL_ROOT/.venv/bin/python"
-"$PS_PYTHON" -m pip install -e "$PS_SKILL_ROOT"
+bash "$PS_SKILL_ROOT/scripts/run.sh" setup
 ```
 
-安装后在 Codex 的 Skill 列表中检查 `podcast-scribe`，没有显示时重启宿主。发现位置与显式调用方式见 [Codex 官方 Skill 文档](https://learn.chatgpt.com/docs/build-skills)。
+`setup` 复用已满足依赖的 Python 环境，或在 Skill 目录创建 `.venv` 并安装依赖。主动设置了 `PODCAST_SCRIBE_PYTHON` 时，仅向该解释器所属的有效虚拟环境安装；不向全局 Python 安装。没有 Python 3.10+ 时需要先提供可用的 Python；`setup` 不生成密钥，也不授予远端访问权限。
 
-**安装目录与任务目录分开。** 安装目录保存工具、参考文档及虚拟环境；任务目录保存音频、转写、历史和产物。项目安装后继续在当前工作区使用；全局安装时，也可将 `PS_WORKSPACE` 设为其他任务目录：
-
-```sh
-PS_WORKSPACE="$PWD"
-mkdir -p "$PS_WORKSPACE"
-cd "$PS_WORKSPACE"
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" doctor --require import markdown site
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/demo.py" --formats markdown
-```
-
-打开当前工作区的 `output/demo/preview/index.html`，即可阅读自制演示并下载 Markdown。该演示不需要 API 或中文字体；首次用它验证安装和输出路径。要验证 PDF，按下节配置后运行 `demo.py --formats markdown pdf`。演示产物写入当前工作区的 `output/demo/`，也可通过 `--output-dir` 指定目录。
-
-随后在以该工作区为当前目录的 Codex 会话中输入：
-
-> 使用 $podcast-scribe，把本工作区的 input.json 整理为完整中文文稿，保留匿名说话人与时间戳，生成摘要、章节、Markdown 和本地草稿阅读站。输出保存在当前工作区。
-
-处理真实音视频时将输入改为实际链接或本地路径，并说明所需输出。Agent 负责阅读完整转写、整理和校对，CLI 本身不另行调用文本模型润色。
-
-新终端需要重新设置 `PS_SKILL_ROOT`、`PS_PYTHON`，并进入本次 `PS_WORKSPACE`。下面的命令均在**任务工作区**执行，工具入口使用绝对路径；所有相对输入、缓存、`data/`、`output/` 都基于当前目录。不要为了运行工具切换到 Skill 安装目录。移动安装目录后重建 `.venv` 并重新安装，避免可编辑安装及命令入口保留旧路径。
+始终从**任务工作区**执行，不要切换到 Skill 安装目录。默认文稿为 `data/<id>/episode.json`，导出为 `output/<id>/`，音频缓存为 `data/cache/`；相对路径均基于任务工作区。未知系列为 `inbox` / “待归类”。更新 Skill 可能替换安装目录，文稿和缓存应留在任务工作区；更新后由 Agent 重新检查环境。
 
 ## 按需自检
 
+新 B站任务和已有转写分别检查实际所需能力：
+
 ```sh
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" doctor --require import markdown site
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" doctor --require pdf
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" doctor --require transcribe
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" doctor --require ingest markdown pdf
+bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require ingest markdown pdf
+bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require import markdown pdf
 ```
 
-`doctor` 输出 JSON：`required` 为所选能力，`capabilities` 给出各项 `ready` 和 `issues`（含原因、修复建议），顶层 `ready` 表示所选本地前置条件是否全部满足。全部满足时退出码为 `0`，否则为 `2`；不带 `--require` 则检查全部能力。根据本次任务选择检查项，不要要求离线文稿流程具备云端密钥。
+用户只要 Markdown 时从检查项中移除 `pdf`；已有单集文稿续编时无需重新检查云端转写能力。`doctor` 返回各能力的状态、问题和修复建议；全部满足时退出码为 `0`，否则为 `2`。由 Agent 补齐必要环境；确需用户提供的密钥、输入或权限不能猜测。默认 PDF 暂不可用时应说明阻塞，不能假称已导出。
 
 | 能力 | 本地前置条件 |
 | --- | --- |
@@ -78,72 +63,65 @@ cd "$PS_WORKSPACE"
 | `transcribe` | `openai` SDK、`OPENAI_API_KEY` 与可执行的 ffmpeg。 |
 | `ingest` | `transcribe` 的条件与 `yt-dlp`。 |
 
-仅使用前三项时，可以用已有 Python 3.10+ 解释器直接运行绝对脚本入口，跳过依赖安装。完整安装包含 `reportlab`、`openai`、`yt-dlp` 和提供内置 ffmpeg 的 `imageio-ffmpeg`。自检会尝试运行 ffmpeg 的版本命令，并对 PDF 实际检查字体能否加载。
+完整依赖包含 `reportlab`、`openai`、`yt-dlp` 和提供内置 ffmpeg 的 `imageio-ffmpeg`。自检会运行 ffmpeg 版本命令，并实际检查 PDF 字体能否加载。`doctor` 不联网、不调用 API，不验证服务端权限、账户额度或密钥有效性。
 
-PDF 自动探测常见系统字体。若报告缺少中文字体，提供有相应字形的中文 `.ttf` 或 TrueType `.ttc` 文件：
+PDF 自动探测常见系统字体；未找到时可通过环境变量 `PODCAST_SCRIBE_FONT` 指定有中文字形的 `.ttf` 或 TrueType `.ttc`。不是所有 `.ttc` / OpenType 字体都支持嵌入。导出后仍须渲染检查分页、中文和段落完整性。
 
-```sh
-export PODCAST_SCRIBE_FONT='/absolute/path/to/chinese-font.ttf'
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" doctor --require pdf
-```
+## 单集生产与续编
 
-按实际字体路径替换示例；不是所有 `.ttc` / OpenType 字体都可供 ReportLab 嵌入。`doctor` 成功后仍须检查最终 PDF 的分页、中文和段落完整性。
-
-网络转写需通过运行环境或宿主的密钥设置提供 `OPENAI_API_KEY`，不要把密钥粘贴到聊天、文稿、日志或 Git。`doctor` 不联网、不发 API 请求、不验证账户额度和模型权限；`transcribe` / `ingest` 的本地检查成功不保证远端服务可用。
-
-## 单集生产
-
-B站单集：
+先检查任务工作区已有稿件；匹配同一输入时直接续编，不重复下载、转写或导入。新 B站任务：
 
 ```sh
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" inspect 'https://www.bilibili.com/video/BV1GZbT6UE7o' --output output/source.json
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" ingest 'https://www.bilibili.com/video/BV1GZbT6UE7o' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" ingest 'https://www.bilibili.com/video/BV1XNtJ6UEmm'
 ```
 
-本地音视频或已有转写（二选一）：
+本地音视频与外部转写分别使用：
 
 ```sh
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" transcribe '/path/to/episode.mp4' --id my-episode --title '本期标题' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" import '/path/to/transcript.json' --id my-episode --title '本期标题' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" transcribe '/path/to/episode.mp4'
+bash "$PS_SKILL_ROOT/scripts/run.sh" import '/path/to/transcript.json'
 ```
 
-新导入不会覆盖已存在的单集；已有稿件使用 `edit`，重新转写则指定新路径。默认音频缓存位于任务工作区的 `data/cache/`，可用 `--cache` 明确指定。
+这些命令自动推导 ID、标题和输出路径，输出实际保存或复用的单集 JSON 路径。`ingest` 内部检查来源；需要单独查看元数据时才用 `inspect`。用户明确指定时才传 `--output`、`--id`、`--title`、`--series-id` 或 `--series-title` 等受支持参数。已有稿件保留人工修改；需要另存一份草稿时指定新的输出路径，转写仍可复用缓存。
 
-`ingest/transcribe` 会将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。音频转换为单声道 16 kHz、32 kbps MP3；长音频自动分片，每片单独检查上传大小，成功结果缓存到本地。中断后重跑相同命令与缓存目录可复用成功分片。跨片人物通过匿名参考声源辅助对应，无法确认的标签需继续校对；具体边界、缓存规则与限制见 [长音视频](long-audio.md)。
+`ingest/transcribe` 将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。长音频自动转换、分片、逐片检查上传大小并保存成功缓存；中断后复用成功片段。跨片人物对应仍须校对，详见 [长音视频](long-audio.md)。不要把缓存复用当作校对完成。
 
-B站普通网页提取失败时，程序尝试正常公开元数据与播放 API，核验所选分 P、权限/预览标记和时长；音频主地址失败后最多使用该音轨响应提供的两个备用地址。平台仍可能限制公开 API，因此不能保证每次都可获取。已下载音频和成功转写应复用。
+B站普通网页提取失败时，程序尝试正常公开元数据与播放 API，并核验指定分 P、权限、预览标记和时长。平台拒绝访问、要求登录或只能提供试看时，保留诊断并说明阻塞，请用户提供本地音视频或处理登录；不能保证获取，也不能将简介冒充对话全文。
 
-`import` 只解析已有文件，不需要 API，不会猜人物姓名。CLI 生成原始草稿后，由 Skill 所在 Agent 按 [分批整理](editing.md) 读取必要文本，按 [数据约定](schema.md) 生成增量 edits JSON；不需要把完整 JSON、原始响应和历史反复放入模型上下文。
-
-## 校对、导出与阅读站
+`ingest`、`transcribe`、`import` 只生成未经整理的草稿。获取或复用文稿后，继续执行：
 
 ```sh
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" edit data/my-episode/episode.json --edits output/editorial.json
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" validate data/my-episode/episode.json
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" export data/my-episode/episode.json --formats markdown pdf --output-dir output/exports
+bash "$PS_SKILL_ROOT/scripts/run.sh" status data/my-episode/episode.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" batch data/my-episode/episode.json --output output/my-episode/batch-001.json
 ```
 
-需要离线阅读页面时，再运行：
+把示例路径替换成命令返回的实际文稿路径。`batch` 默认每批 6000 字符；Agent 按 [分批整理](editing.md) 保存笔记、提交增量编辑并覆盖全文，无需用户了解批次参数。用户只要原始草稿时才省略额外整理。
+
+## 校对与导出
+
+按 [数据约定](schema.md) 写入增量编辑，再校验与导出：
 
 ```sh
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" site data --preview --output-dir output/preview
+bash "$PS_SKILL_ROOT/scripts/run.sh" edit data/my-episode/episode.json --edits output/my-episode/edits-001.json --batch output/my-episode/batch-001.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" validate data/my-episode/episode.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" export data/my-episode/episode.json
 ```
 
-仅要 Markdown 时传 `--formats markdown`。直接打开 `output/preview/index.html`，即可离线阅读、搜索、按章节定位并下载文件。第一次只有草稿时，正式站点为空是预期行为。
+默认输出 `output/<id>/<id>.md` 和 `output/<id>/<id>.pdf`。用户只要 Markdown 时加 `--formats markdown`；用户指定路径时传 `--output-dir`。
 
-段落整理完成记为 `edited`，疑点记为 `needs_review`，实际核对后才设为 `reviewed`。全部段落为 `reviewed` 后，才能按 schema 更新整集 `review` 字段；若仍有未知说话人，则不能确认整集人物归属。修改正文或归属会重置对应段落状态，普通编辑也会清空整集复核标记。旧稿件出现全局与逐段状态冲突时，通过 `edit` 退回草稿并保留历史，见 [校对状态与兼容修复](schema.md#校对状态)。
+段落整理完成记为 `edited`，疑点记为 `needs_review`，实际核对后才设为 `reviewed`。全部段落为 `reviewed` 后才能确认整集内容校对；归属不明时不确认人物。修改正文或归属会重置相应校对状态。结构验证不能替代语义校对，无法完成来源核对时保留草稿并在交付时说明。旧稿校对冲突的修复见 [校对约定](schema.md#校对状态)。
 
-社区分享采用独立的 [投稿流程](sharing.md)，不需要先运行 `publish`。只有准备自行部署完整站点时，完成校对且用户有明确公开意图后运行：
+## 可选阅读页与分享
+
+用户需要离线阅读页时才执行：
 
 ```sh
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" publish data/my-episode/episode.json
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" export data/my-episode/episode.json --formats markdown pdf --output-dir output/exports
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" site data --output-dir output/site
+bash "$PS_SKILL_ROOT/scripts/run.sh" site data --preview
 ```
 
-只有 `output/site/` 是准备部署的静态目录。不要上传 `data/`、缓存、转写原始响应、诊断、编辑历史或 `.venv`。草稿预览与正式构建使用不同输出目录。`publish` 不执行部署、购域名或更改外部账户。
+打开 `output/preview/index.html` 阅读草稿。只在用户要求自行部署、且内容已校对时运行本地 `publish`，重新导出后执行正式 `site data`，产物为 `output/site/`。`publish` 不执行线上部署，也不是社区分享的前置步骤。
 
-第一版管理入口是 Skill + CLI；尚无网页编辑后台、自动订阅、多用户账户。时间戳链接返回原视频，未实现内嵌同步播放器。画面 OCR、人物人脸识别、截图提取不在第一版范围。
+任务完成并交付文件后，在对话中邀请社区分享一次；用户已明确仅本地、任务未完成或内容为演示时不邀请。用户同意后按 [分享投稿](sharing.md) 准备材料；不回复不视为同意，不自动公开。不要上传 `data/`、缓存、原始响应、编辑历史或虚拟环境。
 
 ## 官方接口依据
 
