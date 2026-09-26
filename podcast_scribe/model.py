@@ -15,6 +15,9 @@ class ContentError(ValueError):
     pass
 
 
+REVIEW_STATUSES = frozenset({"unreviewed", "edited", "needs_review", "reviewed", "pending", "uncertain"})
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -34,6 +37,16 @@ def _number(value, label):
         raise ContentError(f"{label} 必须是非负有限数值")
 
 
+def _review_flags(ep):
+    review = ep.get("review", {})
+    if not isinstance(review, dict):
+        raise ContentError("review 必须是对象")
+    for key in ("speakers_confirmed", "content_checked"):
+        if key in review and type(review[key]) is not bool:
+            raise ContentError(f"review.{key} 必须是布尔值")
+    return review
+
+
 def validate_episode(ep: dict, *, for_publication: bool = False) -> dict:
     if not isinstance(ep, dict) or ep.get("schema_version") != 1:
         raise ContentError("需要 schema_version=1 的单集 JSON")
@@ -45,6 +58,7 @@ def validate_episode(ep: dict, *, for_publication: bool = False) -> dict:
         raise ContentError("标题不能为空")
     if ep.get("status") not in ("draft", "published"):
         raise ContentError("status 必须是 draft 或 published")
+    review = _review_flags(ep)
     _identifier(ep.get("series", {}).get("id"), "series.id")
     if not ep.get("series", {}).get("title"):
         raise ContentError("需要系列名称")
@@ -88,6 +102,9 @@ def validate_episode(ep: dict, *, for_publication: bool = False) -> dict:
         for key in ("raw_text", "text"):
             if not isinstance(s.get(key), str) or not s[key].strip():
                 raise ContentError(f"段落 {key} 不能为空；完整对话不得删除段落")
+        review_status = s.get("review_status", "unreviewed")
+        if not isinstance(review_status, str) or review_status not in REVIEW_STATUSES:
+            raise ContentError(f"段落 {s['id']} 的 review_status 无效；请使用 unreviewed/edited/needs_review/reviewed")
     by_id = {s["id"]: s for s in segments}
     chapters = ep.get("chapters", [])
     if not isinstance(chapters, list):
@@ -116,8 +133,11 @@ def validate_episode(ep: dict, *, for_publication: bool = False) -> dict:
         link = urlparse(reference.get("url", ""))
         if link.scheme not in ("https", "http") or not link.netloc:
             raise ContentError("核验来源仅支持 http/https 链接")
+    if review.get("content_checked") is True and any(s.get("review_status") != "reviewed" for s in segments):
+        raise ContentError("content_checked=true 需要所有段落明确标记为 reviewed；请逐段核对")
+    if review.get("speakers_confirmed") is True and any(s.get("speaker_id") is None for s in segments):
+        raise ContentError("speakers_confirmed=true 时仍有说话人待确认的段落")
     if for_publication or ep["status"] == "published":
-        review = ep.get("review", {})
         if not all(review.get(k) is True for k in ("speakers_confirmed", "content_checked")):
             raise ContentError("发布前需要完成人物与内容校对")
         if not chapters or not ep.get("summary"):
@@ -143,8 +163,20 @@ def new_episode(metadata: dict, segments: list[dict], speakers: list[dict], *, s
     return validate_episode(ep)
 
 
-def load_episode(path: Path) -> dict:
-    return validate_episode(json.loads(Path(path).read_text(encoding="utf-8")))
+def load_episode(path: Path, *, for_edit: bool = False) -> dict:
+    ep = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not for_edit:
+        return validate_episode(ep)
+    # Older records may claim publication while slices still await review.
+    # Validate a draft copy, but return the untouched record for history backup.
+    if not isinstance(ep, dict) or ep.get("status") not in ("draft", "published"):
+        raise ContentError("status 必须是 draft 或 published")
+    _review_flags(ep)
+    draft = deepcopy(ep)
+    draft["status"] = "draft"
+    draft["review"] = {"speakers_confirmed": False, "content_checked": False}
+    validate_episode(draft)
+    return ep
 
 
 def write_json(path: Path, data: dict):
@@ -190,6 +222,10 @@ def apply_edits(ep: dict, edits: dict) -> dict:
                 lookup[ident] = {"id": ident, "name": "", "role": ""}
                 result[group].append(lookup[ident])
             seen.add(ident)
+            if group == "segments" and "review_status" not in patch and any(
+                key in patch and patch[key] != lookup[ident].get(key) for key in ("text", "speaker_id")
+            ):
+                lookup[ident]["review_status"] = "edited"
             lookup[ident].update(patch)
     if "review" in edits:
         if not isinstance(edits["review"], dict) or set(edits["review"]) - set(result["review"]) or any(type(v) is not bool for v in edits["review"].values()):

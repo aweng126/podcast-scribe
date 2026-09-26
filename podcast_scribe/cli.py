@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -40,7 +39,10 @@ def _save_new(args, metadata, segments, speakers):
 def parser():
     root = argparse.ArgumentParser(prog="podcast-scribe", description="听稿 / Podcast Scribe：将播客与访谈整理成可阅读、可检索、可导出的完整文稿。")
     sub = root.add_subparsers(dest="command", required=True)
-    sub.add_parser("doctor", help="检查依赖和密钥是否配置，不显示密钥")
+    from .doctor import CAPABILITIES
+    p = sub.add_parser("doctor", help="按能力检查本地环境，不联网、不显示密钥")
+    p.add_argument("--require", nargs="+", choices=CAPABILITIES,
+                   help="只检查指定能力；省略时检查全部，缺少任一前置条件时退出码为 2")
     p = sub.add_parser("inspect", help="只读取 B站单集元数据")
     p.add_argument("url")
     p.add_argument("--output", type=Path)
@@ -75,7 +77,8 @@ def parser():
     p.add_argument("episode", type=Path)
     p = sub.add_parser("site", help="构建静态阅读站；默认仅含已发布节目")
     p.add_argument("episodes", nargs="+", type=Path, help="单集 JSON 文件或含 episode.json 的目录")
-    p.add_argument("--output-dir", type=Path, default=Path("output/site"))
+    p.add_argument("--output-dir", type=Path,
+                   help="默认正式站 output/site；--preview 时默认 output/preview")
     p.add_argument("--preview", action="store_true", help="包含草稿与演示，仅用于本地预览")
     p = sub.add_parser("validate", help="检查结构、时间戳和人物引用")
     p.add_argument("episode", type=Path)
@@ -84,10 +87,10 @@ def parser():
 
 def run(args):
     if args.command == "doctor":
-        import os
-        deps = {m: importlib.util.find_spec(m) is not None for m in ("yt_dlp", "reportlab", "imageio_ffmpeg", "openai")}
-        print(json.dumps({"dependencies": deps, "openai_api_key_configured": bool(os.environ.get("OPENAI_API_KEY")),
-                          "network": "not tested", "cloud_transcription": "requires model access; audio sent to configured OpenAI endpoint"}, indent=2))
+        from .doctor import check_environment
+        report = check_environment(args.require)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["ready"] else 2
     elif args.command == "inspect":
         from .sources import inspect_source
         metadata = inspect_source(args.url)
@@ -117,7 +120,7 @@ def run(args):
                                "url": args.source_url, "author": ""}}
         _save_new(args, metadata, segments, speakers)
     elif args.command == "edit":
-        before = load_episode(args.episode)
+        before = load_episode(args.episode, for_edit=True)
         after = apply_edits(before, _read(args.edits))
         backup = args.episode.parent / "history" / f"{before['id']}-r{before.get('revision', 1)}.json"
         if not backup.exists():
@@ -150,7 +153,8 @@ def run(args):
             ep["artifacts"] = {key: str((path.parent / value).resolve()) if not Path(value).is_absolute() else value
                                for key, value in ep.get("artifacts", {}).items()}
             episodes.append(ep)
-        print(build_site(episodes, args.output_dir, include_drafts=args.preview).resolve())
+        output_dir = args.output_dir or Path("output/preview" if args.preview else "output/site")
+        print(build_site(episodes, output_dir, include_drafts=args.preview).resolve())
     elif args.command == "validate":
         ep = load_episode(args.episode)
         print(f"结构有效：{len(ep['segments'])} 段 / {len(ep['speakers'])} 位说话人 / {ep['status']}")
@@ -159,8 +163,7 @@ def run(args):
 def main(argv=None):
     args = parser().parse_args(argv)
     try:
-        run(args)
-        return 0
+        return run(args) or 0
     except (ContentError, OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2

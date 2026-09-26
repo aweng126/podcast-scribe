@@ -7,9 +7,6 @@ Keep indices so chapters can still address the original passage within a turn.
 from __future__ import annotations
 
 
-_PENDING = {"needs_review", "uncertain", "pending", "unreviewed"}
-
-
 def segment_text_parts(segments: list[dict]) -> list[str]:
     """Return joinable text fragments, retaining explicit paragraph breaks.
 
@@ -54,7 +51,7 @@ boundaries retain inline anchors, and never split an uninterrupted sentence.
         turn = turns[-1]
         turn["segments"].append({**segment, "index": index})
         turn["end"] = max(turn["end"], segment.get("end", 0))
-        turn["needs_review"] |= segment.get("review_status") in _PENDING
+        turn["needs_review"] |= segment.get("review_status") != "reviewed"
     for turn in turns:
         turn["text"] = "".join(segment_text_parts(turn["segments"]))
     return turns

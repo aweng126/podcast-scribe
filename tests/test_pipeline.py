@@ -23,6 +23,7 @@ def episode():
 def editorial():
     return {"summary": ["两人讨论结论的限制。"],
             "chapters": [{"id": "ch1", "title": "样本与反例", "start": 0, "segment_id": "seg-00001"}],
+            "segments": [{"id": ident, "review_status": "reviewed"} for ident in ("seg-00001", "seg-00002")],
             "review": {"speakers_confirmed": True, "content_checked": True}}
 
 

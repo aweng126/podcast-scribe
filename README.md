@@ -4,7 +4,7 @@
 
 支持 B站单集或本地音视频，保留说话人、时间戳、摘要与章节；从同一份 JSON 导出 Markdown、中文 PDF 和静态播客系列阅读站。仓库与 Skill 名称为 `podcast-scribe`，Python 包为 `podcast_scribe`。
 
-## 当前版本
+## 当前版本：v0.1 预览版
 
 - Skill 入口：[SKILL.md](SKILL.md)。整个仓库就是 skill 目录。
 - 内容生产：Skill + Python CLI；人物重命名、逐段修订、编辑历史、草稿/发布状态。
@@ -14,16 +14,26 @@
 
 第一版没有网页编辑后台、自动订阅、多用户账户或自动公网部署。CLI 导入/转写生成原始草稿，由 Skill 的 agent 阅读全文、整理内容并生成摘要章节。结构验证不能替代语义校对。
 
-## 快速体验
+## 安装为 Skill
+
+首批目标为支持本地脚本执行的 Codex CLI / IDE，使用 Python 3.10+ 和 macOS / Linux shell。将**整个仓库**放入用户的 `~/.agents/skills/podcast-scribe/`，或某个项目的 `.agents/skills/podcast-scribe/`，即可供宿主发现。不能只复制 SKILL.md；其他 Agent 的发现方式需另行确认。
+
+完整克隆、安装、首次调用及字体配置命令见 [安装与运行](references/workflow.md#安装与首次调用)。安装后可在任务工作区向 Agent 输入：
+
+> 使用 $podcast-scribe，把 input.json 整理为完整中文文稿，保留匿名说话人与时间戳，生成摘要、章节、Markdown 和本地草稿阅读站。输出保存在当前工作区。
+
+## 在当前克隆中快速体验
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[test]'
-.venv/bin/podcast-scribe --help
-.venv/bin/python scripts/demo.py
+.venv/bin/python -m pip install -e .
+.venv/bin/podcast-scribe doctor --require import markdown site
+.venv/bin/python scripts/demo.py --formats markdown
 ```
 
-打开 `output/demo/preview/index.html`，阅读自制功能演示并下载 Markdown/PDF。演示不是任何真实节目的转写，没有对应音视频；它不会覆盖真实节目的 `output/preview/` 或正式站点。
+打开当前工作区的 `output/demo/preview/index.html`，阅读自制功能演示并下载 Markdown。演示不是任何真实节目的转写，没有对应音视频；它不会覆盖真实节目的 `output/preview/` 或正式站点。需要 PDF 时先运行 `doctor --require pdf`，再运行 `scripts/demo.py --formats markdown pdf`。
+
+安装为全局 Skill 后，应从**任务工作区**调用安装目录中的绝对脚本入口，音频、缓存和文稿均留在任务工作区；演示脚本也遵守该约定，并支持 `--output-dir`。已有转写的导入、Markdown 与阅读站只需 Python 标准库，可以直接使用 `python3 scripts/podcast_scribe.py`；音频转写与 PDF 需要相应依赖。
 
 详细安装、真实输入、校对与导出命令见 [工作流](references/workflow.md)；编辑数据格式见 [数据约定](references/schema.md)。
 
@@ -51,9 +61,14 @@ python3 -m venv .venv
 移动项目目录时，建议在新目录重新创建虚拟环境，再运行 `.venv/bin/python -m pip install -e '.[test]'`，以更新可编辑安装路径和命令入口。仅修改包名时，重新安装即可。当前版本尚未发布，不保留旧命令或旧包名别名。
 
 ```sh
+.venv/bin/python -m pip install -e '.[test]'
 .venv/bin/python -m pytest -q
-.venv/bin/podcast-scribe doctor
+.venv/bin/podcast-scribe doctor --require import markdown site pdf
 node --check podcast_scribe/assets/app.js
 ```
 
-PDF 使用可嵌入中文 TrueType 字体，可用 `PODCAST_SCRIBE_FONT` 配置。API 密钥仅从运行环境读取，不应保存到仓库、文稿或站点。公开部署只使用 `output/site/`；音频缓存、原始转写、草稿预览与编辑历史保留在本地。
+`doctor --require ...` 只检查本次需要的能力，缺少所需前置条件返回非零并提供修复建议；不带参数检查全部能力。它不联网，云端转写检查仅表示本地前置满足，不保证账户或模型可用。
+
+PDF 使用可嵌入中文 TrueType 字体，可用 `PODCAST_SCRIBE_FONT` 配置。完整测试需要中文字体和 Node.js；测试依赖已包含 PDF 校验使用的 `pypdf`。API 密钥仅从运行环境读取，不应保存到仓库、文稿或站点。公开部署只使用 `output/site/`；音频缓存、原始转写、草稿预览与编辑历史保留在本地。
+
+整集内容校对完成要求每个段落均为 `reviewed`；修改正文或说话人归属后需要重新核对。旧稿若存在全局/逐段状态冲突，可通过 `edit` 保留历史并退回草稿，详见 [校对状态约定](references/schema.md#校对状态)。

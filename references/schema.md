@@ -21,17 +21,40 @@
 ```json
 {
   "speakers": [{"id": "speaker-1", "name": "主持人（姓名待确认）", "role": "主持人"}],
-  "segments": [{"id": "seg-00001", "text": "这是一段忠实整理后的完整发言。"}],
+  "segments": [{"id": "seg-00001", "text": "这是一段忠实整理后的完整发言。", "review_status": "edited"}],
   "summary": ["本集讨论的主要议题。"],
   "chapters": [{"id": "chapter-1", "title": "话题名称", "start": 0.0, "segment_id": "seg-00001"}]
 }
 ```
 
-示例的章节时间必须替换成真实段落开始时间。编辑可局部更新；不允许删除段落、改原始转写或时间戳。SRT 无人物标签时，先通过 `speakers` 加入确认过的匿名人物定义，再为段落指定 `speaker_id`。保存会备份前一版本到相邻 `history/`，撤回到草稿并重置校对状态。
+示例的章节时间必须替换成真实段落开始时间。编辑可局部更新；不允许删除段落、改原始转写或时间戳。SRT 无人物标签时，先通过 `speakers` 加入确认过的匿名人物定义，再为段落指定 `speaker_id`。保存会备份前一版本到相邻 `history/`，撤回到草稿并重置整集校对状态。正文或说话人归属实际变更时，该段默认退回 `edited`；只有已核对这次变更，才在同一段 patch 中显式设为 `reviewed`。
 
 `segments` 是音频对齐切片，不是阅读段落。三种输出都按相邻且相同的已定义 `speaker_id` 合并为话轮，仅显示一次姓名和起始时间；未知说话人不自动合并。原始切片和章节点仍保留，章节跳转到话轮内的对应文字，不在一句话中间强插章节标题。合并只处理展示；去除重复词或多余断句符号仍需通过 `edit` 修改整理稿，并保留原始文本。明确的自然段可用 `\n\n` 表示。
 
-最后单独写 `{"review":{"speakers_confirmed":true,"content_checked":true}}` 表示**已完成**对应校对，不能为通过发布验证而随意设置。未知真名不影响确认匿名标签；无法判断哪位说话人的段落仍保持 `null`。
+## 校对状态
+
+逐段 `review_status` 使用以下值：
+
+| 状态 | 含义 |
+| --- | --- |
+| `unreviewed` | 原始导入，尚未整理或核对；旧记录缺失此字段时按此状态处理。 |
+| `edited` | 已整理，尚未完成核对。 |
+| `needs_review` | 存在听不清、交叠发言、归属不明等疑点，仍待核对。 |
+| `reviewed` | 已依据来源完成该段核对。 |
+
+旧值 `pending`、`uncertain` 仍可读取，均按待核对显示；新稿使用上表状态。其他值会被拒绝。除 `reviewed` 外，阅读输出均显示待核对；润色完成不等于校对完成。
+
+实际逐段核对后，通过 `edit` 更新已核对段落，例如：
+
+```json
+{"segments":[{"id":"seg-00001","review_status":"reviewed"}]}
+```
+
+所有段落均为 `reviewed` 后，才可另行设置 `{"review":{"speakers_confirmed":true,"content_checked":true}}`。该操作表示**已完成**对应校对，不能为通过发布验证而随意设置。`content_checked: true` 与尚未核对的段落不能同时保存；`speakers_confirmed: true` 时不得存在归属为 `null` 的段落。未知真名不影响确认匿名标签，无法判断谁在说话则仍保持 `null`。
+
+旧版本若留下了“整集已校对、段落仍待核对”的矛盾记录，普通校验和导出会指出问题。可执行 `edit` 应用 `{"review":{"speakers_confirmed":false,"content_checked":false}}`，保留历史并退回草稿，再逐段核对；不要直接修改原文件或批量假定为已核对。`edit` 的兼容读取只放宽旧校对状态冲突，其他结构错误仍需处理。
+
+## 外部转写导入
 
 外部转写 JSON 支持 `{"segments":[{"start":0,"end":3,"speaker":"A","text":"内容"}]}`、直接段落数组及 B站 `body` 格式。SRT/VTT 支持时间戳；VTT 的 `<v Name>` 标签可用作匿名人物分组线索。
 
