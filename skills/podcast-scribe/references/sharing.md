@@ -18,7 +18,7 @@ npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 
 ```text
 使用 $podcast-scribe 整理 ./input.json，原节目链接是 <来源链接>。
-保留完整对话、说话人与时间戳，生成摘要、章节和 Markdown，暂不分享。
+保留完整对话、说话人与时间戳，生成摘要、章节和 Markdown。
 ```
 
 也可将输入换成 B站链接或本地音视频。得到本地单集 JSON 和 Markdown 后检查全文；离线页面仅在需要时另外请求生成。
@@ -29,9 +29,17 @@ npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 
 投稿需要全部段落已核对、人物归属已确认、有摘要、章节和原节目来源链接。未知真名可以保留匿名标签；无法确认谁在说话时仍不能投稿。只有输入转写可供核对时，应在文稿中说明核对范围，不声称听音复核。具体状态见 [校对约定](schema.md#校对状态)。演示记录不能作为真实节目投稿。
 
-### 3. 准备公开投稿文件
+### 3. 回应分享邀请
 
-确认可以公开后，对 Agent 说：
+每次任务完成并交付本地文件后，Skill 会主动邀请分享一次，例如：
+
+> 是否愿意将这篇文稿分享到 Podcast Scribe 社区阅读站？可以仅保存在本地；如果愿意，请告诉我公开署名。
+
+可以回复“仅保存在本地”，或“愿意分享，署名为「我的名字」”。不回复时仍只保留本地产物。若一开始已说明“仅本地”或“不分享”，本次任务结束时不会重复邀请；已经明确要求分享时，直接继续准备。批量任务统一询问，可只选择其中部分文稿。
+
+仅完成转录草稿时，Agent 会说明还需完成校对后才能投稿；选择愿意分享也不会跳过校对或自动标记为已复核。失败、未完成的任务和演示内容不邀请投稿。邀请由 Skill 所在 Agent 在对话中提出，单独运行 CLI 不会弹出交互问题。
+
+也可以稍后主动提出：
 
 ```text
 使用 $podcast-scribe 为 ./data/my-episode/episode.json 生成公开投稿文件。
@@ -116,4 +124,4 @@ python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" share data/my-episode/episode
 python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" share data/my-episode/episode.json --attribution '公开署名' --confirm-public --output output/share/my-episode-v2.json
 ```
 
-Agent 只处理用户选择公开的内容；已有授权覆盖的公开意图无需重复确认。只生成文件时报告“投稿文件已准备”；获得实际 Issue URL 后才能报告“已投稿”，确认 Pages 部署成功后才能报告“已上线”。收到撤稿请求时说明上述当前流程，不声称关闭 Issue 或修改本地 `status` 已完成下线。
+Agent 在交付本次任务的本地文件后按上述规则邀请一次，只处理用户同意公开的内容。用户接受邀请且校对完成后准备投稿材料；署名缺失时只询问署名，不猜测姓名或重复确认已有授权。只生成文件时报告“投稿文件已准备”；获得实际 Issue URL 后才能报告“已投稿”，确认 Pages 部署成功后才能报告“已上线”。收到撤稿请求时说明上述当前流程，不声称关闭 Issue 或修改本地 `status` 已完成下线。
