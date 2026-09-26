@@ -4,7 +4,26 @@
 
 ## 安装与首次调用
 
-将**整个仓库**安装到 Codex 的用户 Skill 目录，不能只复制 SKILL.md。以下为首次安装命令；已有安装时复用原目录，不重复克隆：
+推荐在任务工作区通过 [Skills CLI](https://github.com/vercel-labs/skills) 安装，需要 Node.js/npm：
+
+```sh
+npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
+PS_SKILL_ROOT="$PWD/.agents/skills/podcast-scribe"
+```
+
+该命令从 GitHub 安装 Skill 及配套文件，无需本项目发布 npm 包。`npx` 不安装 Python 依赖。需要音频转写或 PDF 时继续初始化：
+
+```sh
+python3 -m venv "$PS_SKILL_ROOT/.venv"
+PS_PYTHON="$PS_SKILL_ROOT/.venv/bin/python"
+"$PS_PYTHON" -m pip install -e "$PS_SKILL_ROOT"
+```
+
+仅使用已有转写、Markdown 和阅读站时，可跳过环境初始化，设置 `PS_PYTHON=python3`，使用同一绝对脚本入口。
+
+需要跨项目使用时，可给安装命令加 `-g`，并将 `PS_SKILL_ROOT` 设为安装器输出的 Skill 路径。更新或重新安装可能替换 Skill 目录，届时重新创建 Python 环境；文稿和缓存应始终保留在任务工作区。
+
+也可不使用 npm，将**整个仓库**手动安装到 Codex 的用户 Skill 目录，不能只复制 SKILL.md。以下为首次手动安装命令；已有安装时复用原目录，不重复克隆：
 
 ```sh
 PS_SKILL_ROOT="$HOME/.agents/skills/podcast-scribe"
@@ -15,12 +34,12 @@ PS_PYTHON="$PS_SKILL_ROOT/.venv/bin/python"
 "$PS_PYTHON" -m pip install -e "$PS_SKILL_ROOT"
 ```
 
-也可以把完整目录放在某个项目的 `.agents/skills/podcast-scribe/`，仅供该项目使用。安装后在 Codex 的 Skill 列表中检查 `podcast-scribe`，没有显示时重启宿主。发现位置与显式调用方式见 [Codex 官方 Skill 文档](https://learn.chatgpt.com/docs/build-skills)。
+安装后在 Codex 的 Skill 列表中检查 `podcast-scribe`，没有显示时重启宿主。发现位置与显式调用方式见 [Codex 官方 Skill 文档](https://learn.chatgpt.com/docs/build-skills)。
 
-**安装目录与任务目录分开。** 安装目录保存工具、参考文档及虚拟环境；任务目录保存音频、转写、历史和产物。选择自己的工作区，例如：
+**安装目录与任务目录分开。** 安装目录保存工具、参考文档及虚拟环境；任务目录保存音频、转写、历史和产物。项目安装后继续在当前工作区使用；全局安装时，也可将 `PS_WORKSPACE` 设为其他任务目录：
 
 ```sh
-PS_WORKSPACE="$HOME/podcast-workspace"
+PS_WORKSPACE="$PWD"
 mkdir -p "$PS_WORKSPACE"
 cd "$PS_WORKSPACE"
 "$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" doctor --require import markdown site

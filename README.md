@@ -10,19 +10,23 @@
 
 ## 安装
 
-需要 Python 3.10+，以下命令适用于 macOS / Linux 上可执行本地脚本的 Codex CLI / IDE。
+需要 Node.js/npm 和 Python 3.10+，以下命令适用于 macOS / Linux 上可执行本地脚本的 Codex CLI / IDE。
 
-将整个仓库安装到 Codex 的用户 Skill 目录：
+在任务工作区使用 [Skills CLI](https://github.com/vercel-labs/skills) 安装：
 
 ```sh
-PS_SKILL_ROOT="$HOME/.agents/skills/podcast-scribe"
-mkdir -p "$HOME/.agents/skills"
-git clone https://github.com/aweng126/podcast-scribe.git "$PS_SKILL_ROOT"
+npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
+```
+
+Skill 安装到当前项目的 `.agents/skills/podcast-scribe/`。首次使用音频转写或 PDF 时，初始化 Python 运行环境：
+
+```sh
+PS_SKILL_ROOT="$PWD/.agents/skills/podcast-scribe"
 python3 -m venv "$PS_SKILL_ROOT/.venv"
 "$PS_SKILL_ROOT/.venv/bin/python" -m pip install -e "$PS_SKILL_ROOT"
 ```
 
-也可安装到项目的 `.agents/skills/podcast-scribe/`。完整安装步骤见[安装与运行](references/workflow.md#安装与首次调用)。
+仅导入已有转写并导出 Markdown / 阅读站时无需第三方 Python 依赖。全局安装与手动安装见[安装与运行](references/workflow.md#安装与首次调用)。
 
 - **音视频转写**：需要在运行环境中配置 `OPENAI_API_KEY`，音频会发送到 OpenAI API，并产生接口费用。导入已有转写无需 API。
 - **中文 PDF**：需要可嵌入的中文 TrueType 字体，可通过 `PODCAST_SCRIBE_FONT` 指定字体路径。
