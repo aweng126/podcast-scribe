@@ -48,6 +48,8 @@ Skill 安装到当前项目的 `.agents/skills/podcast-scribe/`。首次运行�
 
 四小时等长节目使用相同入口，失败后可复用成功分片继续处理；跨片说话人对应仍须校对。机制与限制见[长音视频](skills/podcast-scribe/references/long-audio.md)，减少上下文开销的流程见[分批整理](skills/podcast-scribe/references/editing.md)。
 
+B站访问受限时，可先在浏览器正常登录，再授权使用该浏览器的登录态重试，具体见[访问受限时的处理](skills/podcast-scribe/references/workflow.md#b站访问受限时)。
+
 ## 分享（可选）
 
 每次转录或文稿整理完成并交付本地文件后，Agent 会在对话中邀请分享一次：

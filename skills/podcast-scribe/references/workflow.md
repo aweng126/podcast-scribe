@@ -86,7 +86,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" import '/path/to/transcript.json'
 
 `ingest/transcribe` 将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。长音频自动转换、分片、逐片检查上传大小并保存成功缓存；中断后复用成功片段。跨片人物对应仍须校对，详见 [长音视频](long-audio.md)。不要把缓存复用当作校对完成。
 
-B站普通网页提取失败时，程序尝试正常公开元数据与播放 API，并核验指定分 P、权限、预览标记和时长。平台拒绝访问、要求登录或只能提供试看时，保留诊断并说明阻塞，请用户提供本地音视频或处理登录；不能保证获取，也不能将简介冒充对话全文。
+B站普通网页提取失败时，程序尝试正常公开元数据与播放 API，并核验指定分 P、权限、预览标记和时长。仍被拒绝时按下节处理，不能将简介冒充对话全文。
 
 `ingest`、`transcribe`、`import` 只生成未经整理的草稿。获取或复用文稿后，继续执行：
 
@@ -96,6 +96,30 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" batch data/my-episode/episode.json --output
 ```
 
 把示例路径替换成命令返回的实际文稿路径。`batch` 默认每批 6000 字符；Agent 按 [分批整理](editing.md) 保存笔记、提交增量编辑并覆盖全文，无需用户了解批次参数。用户只要原始草稿时才省略额外整理。
+
+## B站访问受限时
+
+默认不读取浏览器登录态。匿名网页与公开 API 均失败后，请用户在浏览器正常打开目标视频，自行完成登录或验证码，并明确授权使用该浏览器的 B站登录态。例如回复“已在 Chrome 登录，允许使用 Chrome 的 B站登录态重试”即可，无需用户配置命令参数。已有明确授权时继续复用；不要重复询问，也不要自动轮试其他浏览器或账户。
+
+以下仅供 Agent 在授权后执行，两个来源二选一。先检查元数据，不下载音频，也不调用转写 API：
+
+```sh
+bash "$PS_SKILL_ROOT/scripts/run.sh" inspect 'https://www.bilibili.com/video/BV1XNtJ6UEmm' --cookies-from-browser chrome
+```
+
+若用户已自行准备本地 Netscape 格式 cookies 文件并授权使用，可改用：
+
+```sh
+bash "$PS_SKILL_ROOT/scripts/run.sh" inspect 'https://www.bilibili.com/video/BV1XNtJ6UEmm' --cookies '/absolute/path/bilibili-cookies.txt'
+```
+
+`--cookies-from-browser` 支持 `BROWSER[:PROFILE]`，例如 `chrome`、`'chrome:Profile 1'` 或 `firefox`；只选择用户授权的浏览器和配置，不支持 yt-dlp 的 `+KEYRING`、`::CONTAINER` 扩展语法。该选项与 `--cookies` 互斥。元数据验证成功后，Agent 在原有 `ingest` 任务中携带同一获授权选项；`inspect` 成功不代表音频下载或转写一定成功。
+
+授权重试仍失败、浏览器凭据读取被拒绝、需要进一步验证或只能试看时，说明诊断并停止，改由用户提供本地音视频，不切换匿名或其他浏览器继续尝试。登录态不能保证解决 HTTP 412。
+
+不要让用户把 cookies 内容粘贴到聊天。yt-dlp 会读取获授权浏览器的 cookie 库；供请求使用的内存 cookie 仅保留未过期的 `bilibili.com` 及其子域 cookies，不导出或写回登录态，也不把 cookie 值或文件路径写入日志、文稿、缓存元数据或分享文件。用户提供的 cookies 文件保持本地，不能随项目、音频或公开投稿上传。
+
+此流程参考 [bilibili-to-doc](https://github.com/programmerloverun/bilibili-to-doc) 使用浏览器登录态的方式；本项目仍默认获取音频并转写说话人，字幕仅辅助核对或由用户作为已有转写导入，没有人物标签时不猜测归属。cookies 格式和浏览器提取机制见 [yt-dlp 官方 FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)。
 
 ## 校对与导出
 

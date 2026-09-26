@@ -23,6 +23,21 @@ def _output(parser):
     parser.add_argument("--output", type=Path, help="默认 data/<来源 ID>/episode.json；存在时不会覆盖")
 
 
+def _cookie_options(parser):
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--cookies-from-browser", metavar="BROWSER[:PROFILE]",
+                       help="明确授权读取所选浏览器的 B站 cookies，仅本次进程内使用")
+    group.add_argument("--cookies", type=Path, metavar="FILE",
+                       help="明确授权读取 Netscape cookies 文件；不写回或导出 cookies")
+
+
+def _source_options(args):
+    if args.cookies_from_browser is not None or args.cookies is not None:
+        from .source_auth import SourceAuth
+        return {"auth": SourceAuth(browser=args.cookies_from_browser, cookies=args.cookies)}
+    return {}
+
+
 def _new_destination(path):
     if path.exists() or path.is_symlink():
         raise ContentError(f"文件已存在，已保留人工修改：{path}。请使用 edit/export 或指定新的输出路径。")
@@ -60,10 +75,12 @@ def parser():
     p = sub.add_parser("inspect", help="只读取 B站单集元数据")
     p.add_argument("url")
     p.add_argument("--output", type=Path)
+    _cookie_options(p)
     p = sub.add_parser("ingest", help="获取 B站音频并调用云端说话人转写")
     p.add_argument("url")
     p.add_argument("--cache", type=Path, default=Path("data/cache"))
     p.add_argument("--language", default="zh")
+    _cookie_options(p)
     _series(p); _output(p)
     p = sub.add_parser("transcribe", help="将本地音视频发送到 OpenAI 转写，产生 API 费用")
     p.add_argument("file", type=Path)
@@ -124,7 +141,7 @@ def run(args):
         return 0 if report["ready"] else 2
     elif args.command == "inspect":
         from .sources import inspect_source
-        metadata = inspect_source(args.url)
+        metadata = inspect_source(args.url, **_source_options(args))
         if args.output:
             write_json(args.output, metadata)
         print(json.dumps(metadata, ensure_ascii=False, indent=2))
@@ -135,22 +152,23 @@ def run(args):
         default_output = args.output is None
         if not default_output:
             _new_destination(args.output)
+        source_options = _source_options(args)
         target = video_target(args.url)
         if target is None:
-            metadata = inspect_source(args.url)
+            metadata = inspect_source(args.url, **source_options)
             target = resolved_video_target(args.url, metadata)
         args.output = args.output or Path("data") / target["id"] / "episode.json"
         with destination_lock(args.output):
             if _resume_default(args, target["identity"], default_output=default_output):
                 return 0
-            metadata = inspect_source(target["url"])
+            metadata = inspect_source(target["url"], **source_options)
             resolved_video_target(target["url"], metadata)
             metadata["id"] = target["id"]
             metadata["source"].update(url=target["url"], video_id=target["identity"]["video_id"])
             metadata["input_identity"] = target["identity"]
             work = args.cache / target["id"]
             write_json(work / "metadata.json", metadata)
-            audio = fetch_audio(target["url"], work)
+            audio = fetch_audio(target["url"], work, **source_options)
             audio_metadata = {}
             segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language,
                                                  metadata=audio_metadata)

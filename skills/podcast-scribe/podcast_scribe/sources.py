@@ -23,8 +23,14 @@ def normalize_url(value: str) -> str:
 
 
 class QuietLogger:
+    preview_only = False
+
     def debug(self, *_): pass
-    def warning(self, *_): pass
+    def warning(self, message):
+        # yt-dlp can return success after warning that only a paid preview is
+        # available. Record just the condition, not its signed URL or message.
+        if "only the preview will be extracted" in str(message).lower():
+            self.preview_only = True
     def error(self, *_): pass
 
 
@@ -33,7 +39,7 @@ def _ydl(extra: dict | None = None):
         from yt_dlp import YoutubeDL
     except ImportError as exc:
         raise ContentError("缺少 yt-dlp；请安装项目依赖") from exc
-    options = {"noplaylist": True, "quiet": True, "no_warnings": True, "logger": QuietLogger(),
+    options = {"noplaylist": True, "quiet": True, "no_warnings": True, "noprogress": True, "logger": QuietLogger(),
                "socket_timeout": 25, "retries": 1, "extractor_retries": 1,
                "cachedir": False, "ignoreerrors": False,
                "cookiefile": None, "cookiesfrombrowser": None, "usenetrc": False}
@@ -58,6 +64,10 @@ def _source_reason(exc: Exception) -> str:
         reason = "音频 CDN 限制请求频率（HTTP 514）"
     elif any(term in message for term in ("412", "captcha", "风控", "验证码", "rate limit")):
         reason = "B站返回验证码或风控响应"
+    elif "429" in message or "too many requests" in message:
+        reason = "B站限制请求频率（HTTP 429）"
+    elif "403" in message or "forbidden" in message or "access denied" in message:
+        reason = "B站拒绝当前请求（HTTP 403 或访问被拒绝）"
     elif _access_denied(message):
         reason = "来源要求登录或相应访问权限"
     elif any(term in message for term in ("connection", "proxy", "timeout", "timed out", "resolve", "network")):
@@ -66,7 +76,13 @@ def _source_reason(exc: Exception) -> str:
 
 
 def _source_error(exc: Exception) -> ContentError:
-    return ContentError(_source_reason(exc) + "；未取得音频。可使用本地 MP4/M4A/MP3，或导入 JSON/SRT/VTT 转写；不会自动读取浏览器 cookies。")
+    return ContentError(_source_reason(exc) + "；未取得音频。" + _access_hint())
+
+
+def _access_hint() -> str:
+    return ("请先在浏览器正常打开该视频，完成登录或验证码；需要复用登录态时，可明确授权 "
+            "--cookies-from-browser 或 --cookies。授权 cookies 不保证登录有效或获得访问权限；"
+            "仍失败时可使用本地 MP4/M4A/MP3，或导入 JSON/SRT/VTT 转写。不会自动读取浏览器 cookies。")
 
 
 def _access_denied(message: str) -> bool:
@@ -98,7 +114,7 @@ def _positive_duration(value) -> float:
 
 
 def _public_api_info(ydl, url: str) -> dict:
-    """Use the extractor's ordinary public APIs, without account credentials.
+    """Use ordinary source APIs with the caller's explicit cookie jar, if any.
 
     The installed _download_playinfo returns data only for an API code of zero;
     it raises on all other codes. Its duration and access flags still need checks
@@ -185,24 +201,29 @@ def _extract_single(ydl, url: str) -> dict:
 
     _requested_page(url)
     try:
-        return _single(ydl.extract_info(url, download=False))
+        info = _single(ydl.extract_info(url, download=False))
+        if getattr(ydl.params.get("logger"), "preview_only", False):
+            raise ContentError("来源仅提供充电或付费内容的试看，未下载音频；请使用你有权取得的完整音视频。")
+        return info
     except DownloadError as webpage_error:
         if _access_denied(str(webpage_error)):
             raise _source_error(webpage_error) from webpage_error
         try:
             return _public_api_info(ydl, url)
         except ContentError as api_error:
-            raise ContentError(f"网页提取失败（{_source_reason(webpage_error)}）；{api_error}") from api_error
+            raise ContentError(f"网页提取失败（{_source_reason(webpage_error)}）；{api_error}。{_access_hint()}") from api_error
         except Exception as api_error:
             raise ContentError(
-                f"网页提取失败（{_source_reason(webpage_error)}）；公开 API 请求失败（{_source_reason(api_error)}）；未取得音频"
+                f"网页提取失败（{_source_reason(webpage_error)}）；公开 API 请求失败（{_source_reason(api_error)}）；未取得音频。{_access_hint()}"
             ) from api_error
 
 
-def inspect_source(value: str) -> dict:
+def inspect_source(value: str, *, auth=None) -> dict:
     url = normalize_url(value)
     try:
         with _ydl({"skip_download": True}) as ydl:
+            if auth is not None:
+                auth.attach(ydl)
             info = _extract_single(ydl, url)
     except ContentError:
         raise
@@ -227,7 +248,7 @@ def inspect_source(value: str) -> dict:
             "subtitle_languages": sorted(set(info.get("subtitles", {})) | set(info.get("automatic_captions", {})))}
 
 
-def fetch_audio(value: str, work_dir: Path) -> Path:
+def fetch_audio(value: str, work_dir: Path, *, auth=None) -> Path:
     url = normalize_url(value)
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -238,6 +259,8 @@ def fetch_audio(value: str, work_dir: Path) -> Path:
     try:
         with _ydl({"format": "bestaudio/best", "outtmpl": str(work_dir / "source.%(ext)s"),
                    "max_filesize": 1024 * 1024 * 1024, "overwrites": True}) as ydl:
+            if auth is not None:
+                auth.attach(ydl)
             info = _extract_single(ydl, url)
             info = _download_audio(ydl, info)
             path = Path(ydl.prepare_filename(info))
@@ -277,7 +300,8 @@ def _download_audio(ydl, info: dict) -> dict:
                 return _single(ydl.process_ie_result(alternative, download=True))
             except DownloadError as backup_error:
                 last_error = backup_error
-        raise ContentError(
+        detail = (
             f"音频下载失败（{_source_reason(first_error)}）；来源提供的可用备用地址也未完成下载（{_source_reason(last_error)}）"
             if selected.get("_podcast_scribe_backup_urls") else f"音频下载失败（{_source_reason(first_error)}）；来源未提供可用备用地址"
-        ) from last_error
+        )
+        raise ContentError(detail + "。" + _access_hint()) from last_error
