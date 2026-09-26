@@ -2,6 +2,10 @@
   "use strict";
   const data = JSON.parse(document.getElementById("transcript-data").textContent);
   const episodes = data.episodes;
+  const hosted = data.mode === "public";
+  const episodeCache = new Map();
+  let searchIndexPromise;
+  let routeGeneration = 0;
   const main = document.getElementById("content");
   const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, character => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[character]));
   const safe = escapeHTML;
@@ -24,6 +28,7 @@
   const series = [...seriesMap.values()];
   const byDate = items => [...items].sort((a, b) => b.published_at.localeCompare(a.published_at));
   const empty = (title, description, link = "") => `<div class="empty-state"><span class="empty-icon" aria-hidden="true">〔 〕</span><h2>${safe(title)}</h2><p>${safe(description)}</p>${link}</div>`;
+  const shareLink = hosted ? '<a class="button button-primary" href="https://github.com/aweng126/podcast-scribe/issues/new?template=share.yml" target="_blank" rel="noopener noreferrer">投稿一篇文稿 ↗</a>' : "";
   const sectionHeading = (eyebrow, title, count) => `<div class="section-heading"><div><span class="eyebrow">${safe(eyebrow)}</span><h2>${safe(title)}</h2></div>${count !== undefined ? `<span class="section-count">${count} ${eyebrow === "SERIES" ? "个系列" : "篇文稿"}</span>` : ""}</div>`;
   const episodeCard = (episode, index, showSeries = true) => `<article class="episode-row">
     <span class="episode-number" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>
@@ -36,7 +41,8 @@
   function home() {
     document.title = "听稿 · 播客里的好对话";
     main.innerHTML = `<section class="hero"><div class="hero-copy"><span class="eyebrow"><span class="accent-line"></span> GOOD CONVERSATIONS, IN WORDS</span><h1>把声音，<br>留在<span>纸上。</span></h1><p>读一场完整的对话。<br>循着章节找到观点，跟着文字重新思考。</p><a class="text-link" href="#/search">寻找你感兴趣的话题 <span aria-hidden="true">↗</span></a></div><div class="hero-art" aria-hidden="true"><div class="art-caption">THE READING ROOM <span>01 — ∞</span></div><div class="art-quote">“</div><div class="art-lines"><i></i><i></i><i></i><i></i><i></i></div><div class="art-bottom">声音有回响<br>文字有留白 <span>↙</span></div></div></section>
-    <section class="library-section" aria-label="播客系列">${sectionHeading("SERIES", "从一个系列开始", series.length)}${series.length ? `<div class="series-grid">${series.map((item, index) => `<a class="series-card tone-${index % 4}" href="${route("series", item.id)}"><div class="series-cover"><span class="series-cover-label">PODCAST SERIES</span><span class="series-cover-title">${safe(item.title)}</span><span class="series-cover-foot">${String(index + 1).padStart(2, "0")} <span aria-hidden="true">↗</span></span></div><div class="series-card-info"><h3>${safe(item.title)}</h3><span>${item.episodes.length} 篇</span><p>${safe(item.description || "收录这个系列的完整对话与章节整理。")}</p></div></a>`).join("")}</div>` : empty("第一场对话，正在路上", "发布第一篇经过校对的文稿后，系列和单集会出现在这里。")}</section>
+    ${hosted ? `<section class="community-note"><p>这里收录社区分享、经维护者审核的播客整理稿。你也可以分享校对完成的文稿，投稿 Issue 及附件会公开。</p>${shareLink}</section>` : ""}
+    <section class="library-section" aria-label="播客系列">${sectionHeading("SERIES", "从一个系列开始", series.length)}${series.length ? `<div class="series-grid">${series.map((item, index) => `<a class="series-card tone-${index % 4}" href="${route("series", item.id)}"><div class="series-cover"><span class="series-cover-label">PODCAST SERIES</span><span class="series-cover-title">${safe(item.title)}</span><span class="series-cover-foot">${String(index + 1).padStart(2, "0")} <span aria-hidden="true">↗</span></span></div><div class="series-card-info"><h3>${safe(item.title)}</h3><span>${item.episodes.length} 篇</span><p>${safe(item.description || "收录这个系列的完整对话与章节整理。")}</p></div></a>`).join("")}</div>` : empty("第一场对话，正在路上", hosted ? "第一篇投稿审核通过后，完整文稿会出现在这里。" : "发布第一篇经过校对的文稿后，系列和单集会出现在这里。")}</section>
     ${episodes.length ? `<section class="library-section">${sectionHeading("LATEST READINGS", "最近收录", episodes.length)}<div class="episode-list">${byDate(episodes).slice(0, 6).map((episode, index) => episodeCard(episode, index)).join("")}</div>${episodes.length > 6 ? '<a class="button button-quiet" href="#/search">浏览全部文稿 ↗</a>' : ""}</section>` : ""}`;
   }
 
@@ -57,9 +63,7 @@
     } catch (_) { return ""; }
   }
 
-  function episodePage(id) {
-    const episode = episodes.find(item => item.id === id);
-    if (!episode) return notFound();
+  function episodePage(episode) {
     document.title = `${episode.title} · 听稿`;
     const speakers = new Map(episode.speakers.map((speaker, index) => [speaker.id, {...speaker, color: index % 6}]));
     const sourceURL = originalLink(episode);
@@ -84,6 +88,8 @@
       catch (_) { return false; }
     });
     const referenceSection = references.length ? `<section class="summary-block" aria-labelledby="references-title"><span class="eyebrow">SOURCES &amp; VERIFICATION</span><h2 id="references-title">来源与人物核验</h2><ul>${references.map(reference => `<li><a class="text-link" href="${safe(reference.url)}" target="_blank" rel="noopener noreferrer">${safe(reference.title || "核验来源")} <span aria-hidden="true">↗</span></a>${reference.note ? `<p>${text(reference.note)}</p>` : ""}</li>`).join("")}</ul></section>` : "";
+    const issueURL = hosted && /^https:\/\/github\.com\/aweng126\/podcast-scribe\/issues\/[1-9][0-9]*$/.test(episode.provenance?.issue_url || "") ? episode.provenance.issue_url : "";
+    const submissionNote = hosted ? `<section class="submission-note" aria-label="投稿信息"><p>投稿署名：${text(episode.attribution || "")}</p>${issueURL ? `<a class="text-link" href="${safe(issueURL)}" target="_blank" rel="noopener noreferrer">查看投稿与反馈 ↗</a><p class="muted">投稿账号：${safe(episode.provenance.submitter)}</p>` : ""}</section>` : "";
     main.innerHTML = `<article class="reader"><nav class="breadcrumb" aria-label="面包屑"><a href="#/">所有系列</a><span aria-hidden="true">/</span><a href="${route("series", episode.series.id)}">${safe(episode.series.title)}</a><span aria-hidden="true">/</span><span>本期文稿</span></nav>${draftNotice}<header class="episode-header"><a class="eyebrow series-name" href="${route("series", episode.series.id)}">${safe(episode.series.title)}</a><h1>${safe(episode.title)}</h1>${episode.description ? `<p class="episode-description">${text(episode.description)}</p>` : ""}<div class="episode-meta"><span>${safe(date(episode))}</span><span>·</span><span>${duration(episode)}</span><span>·</span><span>${episode.turns.length} 段对话</span>${badge(episode)}</div><div class="episode-actions">${sourceURL ? `<a class="button button-primary" href="${safe(sourceURL)}" target="_blank" rel="noopener noreferrer">回到原视频 <span aria-hidden="true">↗</span></a>` : '<span class="unavailable">原视频链接待补充</span>'}${episode.downloads.markdown ? `<a class="button" href="${safe(episode.downloads.markdown)}" download>↓ Markdown</a>` : ""}${episode.downloads.pdf ? `<a class="button" href="${safe(episode.downloads.pdf)}" download>↓ PDF</a>` : ""}${!episode.downloads.markdown && !episode.downloads.pdf ? '<span class="unavailable">下载文件尚未生成</span>' : ""}</div></header>
     <div class="reader-layout"><aside class="reader-sidebar"><details class="chapter-panel" open><summary>本期目录 <span aria-hidden="true">⌄</span></summary><nav aria-label="本期章节"><button class="chapter-link" data-scroll="episode-summary"><span class="chapter-time">INTRO</span><span>本期摘要</span></button>${episode.chapters.map((chapter, index) => `<button class="chapter-link" data-scroll="segment-${chapterTarget(chapter)}"><span class="chapter-time">${stamp(chapter.start)}</span><span>${safe(chapter.title || `章节 ${index + 1}`)}</span></button>`).join("")}${!episode.chapters.length ? '<button class="chapter-link" data-scroll="transcript"><span class="chapter-time">TEXT</span><span>完整对话</span></button>' : ""}</nav></details><section class="speaker-panel"><h2>参与对话</h2>${episode.speakers.length ? episode.speakers.map((speaker, index) => `<div class="speaker-entry"><span class="speaker-dot speaker-${index % 6}" aria-hidden="true"></span><div><strong>${safe(speaker.name)}</strong>${speaker.role ? `<small>${safe(speaker.role)}</small>` : ""}</div></div>`).join("") : '<p class="muted">人物信息待确认</p>'}<p class="editorial-note">${reviewNote}</p></section></aside>
     <div class="reader-body"><section class="summary-block" id="episode-summary" tabindex="-1"><span class="eyebrow">IN THIS EPISODE</span><h2>这期聊了什么</h2>${episode.summary.length ? `<ul>${episode.summary.map(item => `<li>${text(item)}</li>`).join("")}</ul>` : '<p class="muted">本期摘要尚未生成，可以直接阅读下方完整对话。</p>'}</section><section class="transcript" id="transcript" tabindex="-1"><div class="transcript-heading"><h2>完整对话</h2><span>整理稿</span></div><p class="transcript-note">保留完整对话，整理口头重复，同一人的连续发言合并展示。点击时间戳可回到原视频核对。</p>${episode.turns.length ? episode.turns.map(turn => {
@@ -92,7 +98,7 @@
       const headings = (chapterAt.get(turn.segment_indices[0]) || []).map(chapter => `<h3 class="transcript-chapter">${safe(chapter.title || "章节")}</h3>`).join("");
       const content = turn.text_parts.map((part, index) => `<span id="segment-${turn.segment_indices[index]}" class="segment-anchor" tabindex="-1">${text(part)}</span>`).join("");
       return `${headings}<div class="dialogue"><div class="dialogue-label"><span class="speaker-dot speaker-${speaker ? speaker.color : "unknown"}" aria-hidden="true"></span><strong>${safe(speaker ? speaker.name : "未识别说话人")}</strong>${url ? `<a class="timestamp" href="${safe(url)}" target="_blank" rel="noopener noreferrer" aria-label="在原视频中查看 ${stamp(turn.start)}">${stamp(turn.start)} ↗</a>` : `<span class="timestamp">${stamp(turn.start)}</span>`}${turn.needs_review ? '<span class="segment-review">待核对</span>' : ""}</div><p>${content}</p></div>`;
-    }).join("") : empty("对话文稿尚未生成", "音视频完成转写与整理后，完整对话会显示在这里。")}</section>${referenceSection}<div class="reading-end"><span aria-hidden="true">◆</span><p>这场对话，读到这里。</p>${sourceURL ? `<a class="text-link" href="${safe(sourceURL)}" target="_blank" rel="noopener noreferrer">去原视频听一听 ↗</a>` : ""}${episode.source.author ? `<small>原作者：${safe(episode.source.author)}</small>` : ""}</div></div></div></article>`;
+    }).join("") : empty("对话文稿尚未生成", "音视频完成转写与整理后，完整对话会显示在这里。")}</section>${referenceSection}${submissionNote}<div class="reading-end"><span aria-hidden="true">◆</span><p>这场对话，读到这里。</p>${sourceURL ? `<a class="text-link" href="${safe(sourceURL)}" target="_blank" rel="noopener noreferrer">去原视频听一听 ↗</a>` : ""}${episode.source.author ? `<small>原作者：${safe(episode.source.author)}</small>` : ""}</div></div></div></article>`;
     main.querySelectorAll("[data-scroll]").forEach(button => button.addEventListener("click", () => {
       const target = document.getElementById(button.dataset.scroll);
       if (target) { target.scrollIntoView({behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start"}); target.focus({preventScroll: true}); }
@@ -101,15 +107,69 @@
     }));
   }
 
+  async function fetchJSON(url) {
+    if (!/^(?:episodes\/[0-9a-f]{64}\.json|search-index\.json)$/.test(url)) throw new Error("Invalid library resource");
+    const response = await fetch(url, {credentials: "omit"});
+    if (!response.ok) throw new Error("Library resource unavailable");
+    return response.json();
+  }
+
+  async function openEpisode(id, generation) {
+    const metadata = episodes.find(item => item.id === id);
+    if (!metadata) return notFound();
+    if (!hosted) return episodePage(metadata);
+    main.innerHTML = `<div class="page-content" role="status" aria-live="polite">${empty("正在打开文稿", "请稍候…")}</div>`;
+    try {
+      if (!episodeCache.has(id)) {
+        episodeCache.set(id, fetchJSON(metadata.data_url).then(episode => {
+          if (episode.id !== id || !Array.isArray(episode.segments) || !Array.isArray(episode.turns)) throw new Error("Invalid episode");
+          return episode;
+        }).catch(error => { episodeCache.delete(id); throw error; }));
+      }
+      const episode = await episodeCache.get(id);
+      if (generation !== routeGeneration) return;
+      episodePage(episode);
+      main.focus({preventScroll: true});
+    } catch (_) {
+      if (generation !== routeGeneration) return;
+      main.innerHTML = `<div class="page-content">${empty("文稿暂时未能加载", "请检查网络连接后重试。", '<button class="button button-primary" data-retry>重新加载</button> <a class="text-link" href="#/">返回首页 ↗</a>')}</div>`;
+      main.querySelector("[data-retry]").addEventListener("click", render);
+    }
+  }
+
+  function loadSearchIndex() {
+    if (!searchIndexPromise) {
+      searchIndexPromise = fetchJSON(data.search_url).then(index => {
+        if (index.schema_version !== 1 || !Array.isArray(index.episodes)) throw new Error("Invalid search index");
+        return new Map(index.episodes.map(episode => [episode.id, String(episode.text).toLocaleLowerCase()]));
+      }).catch(error => { searchIndexPromise = undefined; throw error; });
+    }
+    return searchIndexPromise;
+  }
+
   function searchPage(query) {
+    const generation = routeGeneration;
+    let searchGeneration = 0;
     document.title = "搜索文稿 · 听稿";
     main.innerHTML = `<div class="page-content search-page"><span class="eyebrow">FIND A CONVERSATION</span><h1>你想读些什么？</h1><form class="search-form" role="search"><label class="sr-only" for="search-input">搜索标题、系列、人物和文稿内容</label><span aria-hidden="true">⌕</span><input type="search" id="search-input" name="q" placeholder="搜索标题、系列、人物或一句话…" value="${safe(query)}" autocomplete="off"><button type="submit">搜索 <span aria-hidden="true">↗</span></button></form><p class="search-hint">在 ${episodes.length} 篇文稿中，寻找值得重读的对话。</p><section id="search-results" aria-label="搜索结果"></section></div>`;
     const input = document.getElementById("search-input");
     const results = document.getElementById("search-results");
-    function update(value) {
+    async function update(value) {
+      const request = ++searchGeneration;
       const terms = value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+      let index;
+      if (hosted && terms.length) {
+        results.innerHTML = '<p role="status" aria-live="polite">正在搜索文稿…</p>';
+        try { index = await loadSearchIndex(); }
+        catch (_) {
+          if (generation !== routeGeneration || request !== searchGeneration) return;
+          results.innerHTML = empty("搜索暂时不可用", "请检查网络连接后，再次提交搜索。 ");
+          return;
+        }
+      }
+      if (generation !== routeGeneration || request !== searchGeneration) return;
       const matches = byDate(episodes).filter(episode => {
-        const haystack = [episode.title, episode.description, episode.series.title, ...episode.summary, ...episode.speakers.map(speaker => speaker.name), ...episode.turns.map(turn => turn.text)].join(" ").toLocaleLowerCase();
+        const haystack = hosted ? (index?.get(episode.id) || "") : [episode.title, episode.description, episode.series.title, ...episode.summary, ...episode.speakers.map(speaker => speaker.name), ...episode.turns.map(turn => turn.text)].join(" ").toLocaleLowerCase();
         return terms.every(term => haystack.includes(term));
       });
       results.innerHTML = `<div class="results-heading" role="status" aria-live="polite">${terms.length ? `找到 ${matches.length} 篇相关文稿` : `全部文稿 · ${matches.length} 篇`}</div>${matches.length ? `<div class="episode-list">${matches.map((episode, index) => episodeCard(episode, index)).join("")}</div>` : empty(terms.length ? "还没有找到这场对话" : "文稿库正在准备中", terms.length ? "试试更短的关键词，或搜索系列名称、人物姓名。" : "第一篇文稿发布后，就可以在这里搜索。", '<a class="text-link" href="#/">返回系列首页 ↗</a>')}`;
@@ -132,12 +192,13 @@
   function render() {
     const hash = location.hash.slice(1) || "/";
     if (hash === "content") { main.focus(); return; }
+    const generation = ++routeGeneration;
     const [path, parameters] = hash.split("?");
     const parts = path.split("/").filter(Boolean);
     try {
       if (!parts.length) home();
       else if (parts[0] === "series" && parts[1]) seriesPage(decodeURIComponent(parts[1]));
-      else if (parts[0] === "episode" && parts[1]) episodePage(decodeURIComponent(parts[1]));
+      else if (parts[0] === "episode" && parts[1]) openEpisode(decodeURIComponent(parts[1]), generation);
       else if (parts[0] === "search") searchPage(new URLSearchParams(parameters || "").get("q") || "");
       else notFound();
     } catch (error) { notFound(); }

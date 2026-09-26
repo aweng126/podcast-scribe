@@ -1,0 +1,308 @@
+"""Hosted-library boundaries and asynchronous reader behavior."""
+
+from copy import deepcopy
+import importlib.util
+import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
+
+import pytest
+
+from podcast_scribe.public_site import build_public_site, loads_record, validate_record
+from podcast_scribe.share import submission_digest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def record(identifier="episode-one", issue=1, content="完整正文：只在单篇与搜索索引中出现。"):
+    submission = {"schema_version": 1, "attribution": "测试投稿人", "episode": {
+        "id": identifier, "title": f"公开文稿 {identifier}", "description": "本期介绍",
+        "source": {"platform": "web", "url": "https://example.com/episode", "author": "原作者"},
+        "series": {"id": "series", "title": "访谈节目", "description": "节目介绍"},
+        "duration_seconds": 10, "published_at": "2026-09-26",
+        "speakers": [{"id": "a", "name": "说话人", "role": "嘉宾"}],
+        "segments": [{"id": "s1", "start": 0, "end": 10, "speaker_id": "a", "text": content, "review_status": "reviewed"}],
+        "chapters": [{"id": "c1", "title": "开场", "start": 0, "segment_id": "s1"}],
+        "summary": ["节目摘要"], "references": [],
+        "review": {"speakers_confirmed": True, "content_checked": True},
+    }}
+    return {"schema_version": 1, "submission": submission, "provenance": {
+        "issue_url": f"https://github.com/aweng126/podcast-scribe/issues/{issue}",
+        "submitter": "someone", "payload_sha256": submission_digest(submission),
+    }}
+
+
+def metadata(path):
+    match = re.search(r'<script id="transcript-data" type="application/json">(.*?)</script>', path.read_text(), re.S)
+    return json.loads(match.group(1))
+
+
+def builder_module():
+    spec = importlib.util.spec_from_file_location("public_builder", ROOT / "scripts" / "build_public_site.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_empty_library_has_useful_public_landing_without_example_content(tmp_path):
+    result = build_public_site([], tmp_path)
+    assert metadata(result)["episodes"] == []
+    assert metadata(result)["mode"] == "public"
+    assert metadata(result)["submit_url"].endswith("/issues/new?template=share.yml")
+    assert json.loads((tmp_path / "search-index.json").read_text())["episodes"] == []
+    assert (tmp_path / ".nojekyll").is_file()
+    assert not (tmp_path / "episodes").exists()
+
+
+def test_home_metadata_is_light_and_downloads_are_derived_only_from_public_data(tmp_path):
+    source = record()
+    before = deepcopy(source)
+    result = build_public_site([source], tmp_path)
+    listing = metadata(result)["episodes"][0]
+    assert "完整正文" not in result.read_text()
+    assert not {"segments", "turns", "raw_text", "artifacts", "history"} & listing.keys()
+    assert re.fullmatch(r"episodes/[a-f0-9]{64}\.json", listing["data_url"])
+    episode = json.loads((tmp_path / listing["data_url"]).read_text())
+    assert episode["segments"][0]["text"] == source["submission"]["episode"]["segments"][0]["text"]
+    assert episode["turns"][0]["segment_indices"] == [0]
+    assert episode["provenance"]["issue_url"].endswith("/1")
+    assert episode["attribution"] == "测试投稿人"
+    assert set(episode["downloads"]) == {"markdown"}
+    markdown = (tmp_path / episode["downloads"]["markdown"]).read_text()
+    assert "完整正文" in markdown and "测试投稿人" in markdown and "issues/1" in markdown
+    search = json.loads((tmp_path / "search-index.json").read_text())
+    assert "完整正文" in search["episodes"][0]["text"]
+    assert source == before
+    serialized = json.dumps(episode)
+    for private_field in ("raw_text", "artifacts", "history"):
+        assert private_field not in serialized
+    assert 'href="app.css"' in result.read_text()
+    assert 'src="app.js"' in result.read_text()
+
+
+def test_record_validation_is_detached_and_binds_provenance():
+    original = record()
+    result = validate_record(original)
+    result["submission"]["episode"]["title"] = "changed"
+    result["provenance"]["submitter"] = "changed"
+    assert original["submission"]["episode"]["title"] != "changed"
+    assert original["provenance"]["submitter"] != "changed"
+    original["provenance"]["payload_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="payload_sha256"):
+        validate_record(original)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda value: value.update(secret="private"),
+    lambda value: value.update(schema_version=True),
+    lambda value: value["provenance"].update(issue_url="javascript:alert(1)"),
+    lambda value: value["provenance"].update(issue_url="https://github.com/other/repo/issues/1"),
+    lambda value: value["provenance"].update(submitter="<script>"),
+    lambda value: value["submission"]["episode"].update(artifacts={"markdown": "/private/secret"}),
+    lambda value: value["submission"]["episode"]["segments"][0].update(raw_text="secret"),
+    lambda value: value["submission"]["episode"]["review"].update(content_checked=False),
+])
+def test_invalid_record_cannot_change_existing_output(tmp_path, mutate):
+    good = record()
+    output = tmp_path / "site"
+    build_public_site([good], output)
+    before = {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+    bad = deepcopy(good)
+    mutate(bad)
+    with pytest.raises(ValueError):
+        build_public_site([good, bad], output)
+    assert {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()} == before
+
+
+def test_duplicates_fail_before_creating_output(tmp_path):
+    first = record()
+    for second in (record(issue=2), record("different", issue=1)):
+        with pytest.raises(ValueError, match="unique"):
+            build_public_site([first, second], tmp_path / "absent")
+        assert not (tmp_path / "absent").exists()
+
+
+def test_rebuild_removes_withdrawn_episode_and_download_but_preserves_other_files(tmp_path):
+    result = build_public_site([record(), record("episode-two", issue=2)], tmp_path)
+    removed_meta = metadata(result)["episodes"][0]
+    removed_path = tmp_path / removed_meta["data_url"]
+    download = tmp_path / json.loads(removed_path.read_text())["downloads"]["markdown"]
+    unrelated = tmp_path / "downloads" / "keep.md"
+    unrelated.write_text("unrelated")
+    build_public_site([record("episode-two", issue=2)], tmp_path)
+    assert not removed_path.exists() and not download.exists()
+    assert unrelated.read_text() == "unrelated"
+    assert "episode-one" not in result.read_text()
+    assert "episode-one" not in (tmp_path / "search-index.json").read_text()
+    build_public_site([], tmp_path)
+    assert list((tmp_path / "episodes").iterdir()) == []
+    assert list((tmp_path / "downloads").iterdir()) == [unrelated]
+
+
+def test_manifest_cannot_delete_external_files_and_generated_symlinks_are_rejected(tmp_path):
+    output = tmp_path / "site"
+    output.mkdir()
+    keep = tmp_path / "keep.md"
+    keep.write_text("keep")
+    (output / ".public-site-manifest.json").write_text(json.dumps({"files": ["../keep.md", "downloads/../../keep.md"]}))
+    build_public_site([], output)
+    assert keep.read_text() == "keep"
+    (output / "episodes").symlink_to(tmp_path, target_is_directory=True)
+    before = (output / "index.html").read_bytes()
+    with pytest.raises(ValueError, match="symlink"):
+        build_public_site([record()], output)
+    assert (output / "index.html").read_bytes() == before
+
+
+def test_record_json_and_content_filenames_are_strict(tmp_path):
+    valid = json.dumps(record(), ensure_ascii=False).encode()
+    assert loads_record(valid)["submission"]["episode"]["id"] == "episode-one"
+    for payload in (b'{"schema_version":1,"schema_version":1}', b'{"x":NaN}', b'{"x":Infinity}', b'\xff', b"[" * 1100):
+        with pytest.raises(ValueError):
+            loads_record(payload)
+    builder = builder_module()
+    path = tmp_path / "issue-1.json"
+    path.write_bytes(valid)
+    assert len(builder.load_records(tmp_path)) == 1
+    path.rename(tmp_path / "issue-2.json")
+    with pytest.raises(ValueError, match="match"):
+        builder.load_records(tmp_path)
+    (tmp_path / "issue-2.json").rename(tmp_path / "arbitrary.json")
+    with pytest.raises(ValueError, match="filename"):
+        builder.load_records(tmp_path)
+    (tmp_path / "arbitrary.json").rename(path)
+    (tmp_path / "alias").symlink_to(path)
+    with pytest.raises(ValueError, match="symlink"):
+        builder.load_records(tmp_path)
+
+
+NODE_HARNESS = r'''
+const fs = require("fs"), vm = require("vm");
+const spec = JSON.parse(fs.readFileSync(0, "utf8"));
+const elements = new Map(), handlers = {}, calls = [], pending = [];
+function element(id) {
+  if (!elements.has(id)) elements.set(id, {
+    innerHTML:"", textContent:"", value:"", listeners:{}, focus(){},
+    addEventListener(event, callback){ this.listeners[event] = callback; },
+    querySelectorAll(){return[];}, querySelector:element
+  });
+  return elements.get(id);
+}
+element("transcript-data").textContent = JSON.stringify(spec.data);
+global.document = {getElementById:element, querySelector:element, title:""};
+global.location = {hash:spec.hash || "#/"};
+global.history = {replaceState(_a,_b,hash){location.hash=hash;}};
+global.window = {scrollTo(){},addEventListener(name, fn){handlers[name]=fn;}};
+global.fetch = (url, options) => {
+  calls.push({url, options});
+  return new Promise((resolve,reject) => pending.push({url,resolve,reject}));
+};
+vm.runInThisContext(fs.readFileSync(process.argv[1], "utf8"));
+const snapshots = [];
+async function flush() { await new Promise(resolve => setImmediate(resolve)); }
+function snapshot() { snapshots.push({html:element("content").innerHTML,results:element("search-results").innerHTML,calls:calls.map(item=>item.url), title:document.title}); }
+(async()=>{
+  await flush(); snapshot();
+  for (const action of spec.actions || []) {
+    if (action.type === "route") { location.hash=action.hash; handlers.hashchange(); }
+    if (action.type === "input") { const input=element("search-input"); input.value=action.value; input.listeners.input(); }
+    if (action.type === "click") element(action.selector).listeners.click({preventDefault(){}});
+    if (action.type === "resolve" || action.type === "reject") {
+      const index=pending.findIndex(item=>item.url===action.url);
+      if(index<0) throw Error("No request: "+action.url);
+      const request=pending.splice(index,1)[0];
+      if(action.type === "reject") request.reject(Error("offline"));
+      else request.resolve({ok:true,json:async()=>spec.resources[action.url]});
+    }
+    await flush(); snapshot();
+  }
+  process.stdout.write(JSON.stringify(snapshots));
+})().catch(error=>{process.stderr.write(error.stack);process.exitCode=1;});
+'''
+
+
+def client(path, actions=None, hash="#/"):
+    if not shutil.which("node"):
+        pytest.skip("Node.js is required for the reader behavior harness")
+    resources = {item.relative_to(path.parent).as_posix(): json.loads(item.read_text())
+                 for item in path.parent.rglob("*.json") if not item.name.startswith(".")}
+    result = subprocess.run(["node", "-e", NODE_HARNESS, str(path.parent / "app.js")],
+                            input=json.dumps({"data": metadata(path), "resources": resources, "hash": hash, "actions": actions or []}),
+                            text=True, capture_output=True, check=True)
+    return json.loads(result.stdout)
+
+
+def test_hosted_home_and_empty_search_do_not_fetch_transcripts(tmp_path):
+    result = build_public_site([], tmp_path)
+    snapshots = client(result, [{"type": "route", "hash": "#/search"}])
+    assert "投稿一篇文稿" in snapshots[0]["html"]
+    assert "审核通过" in snapshots[0]["html"]
+    assert all(snapshot["calls"] == [] for snapshot in snapshots)
+
+
+def test_hosted_routes_load_one_episode_and_ignore_stale_fetches(tmp_path):
+    result = build_public_site([record(content="第一篇独有正文"), record("episode-two", 2, "第二篇独有正文")], tmp_path)
+    first, second = [item["data_url"] for item in metadata(result)["episodes"]]
+    snapshots = client(result, [
+        {"type": "route", "hash": "#/episode/episode-two"},
+        {"type": "resolve", "url": second},
+        {"type": "resolve", "url": first},
+        {"type": "route", "hash": "#/"},
+        {"type": "route", "hash": "#/episode/episode-one"},
+    ], hash="#/episode/episode-one")
+    assert snapshots[0]["calls"] == [first]
+    assert snapshots[1]["calls"] == [first, second]
+    assert "第二篇独有正文" in snapshots[2]["html"]
+    assert snapshots[3]["html"] == snapshots[2]["html"]
+    assert "第一篇独有正文" in snapshots[-1]["html"]
+    assert len(snapshots[-1]["calls"]) == 2
+    assert "投稿署名：测试投稿人" in snapshots[-1]["html"]
+    assert "issues/1" in snapshots[-1]["html"]
+
+
+def test_episode_fetch_failure_can_retry_without_reloading_the_page(tmp_path):
+    result = build_public_site([record()], tmp_path)
+    url = metadata(result)["episodes"][0]["data_url"]
+    snapshots = client(result, [
+        {"type": "reject", "url": url},
+        {"type": "click", "selector": "[data-retry]"},
+        {"type": "resolve", "url": url},
+    ], hash="#/episode/episode-one")
+    assert "文稿暂时未能加载" in snapshots[1]["html"]
+    assert snapshots[2]["calls"] == [url, url]
+    assert "完整正文" in snapshots[3]["html"]
+
+
+def test_fulltext_search_loads_only_its_index_and_ignores_stale_query(tmp_path):
+    result = build_public_site([record(content="needle全文词"), record("episode-two", 2, "其他正文")], tmp_path)
+    snapshots = client(result, [
+        {"type": "input", "value": "needle"},
+        {"type": "resolve", "url": "search-index.json"},
+        {"type": "input", "value": "其他正文"},
+    ], hash="#/search")
+    assert snapshots[0]["calls"] == []
+    assert snapshots[1]["calls"] == ["search-index.json"]
+    assert "episode-one" in snapshots[2]["results"] and "episode-two" not in snapshots[2]["results"]
+    assert "episode-two" in snapshots[3]["results"] and "episode-one" not in snapshots[3]["results"]
+    assert snapshots[3]["calls"] == ["search-index.json"]
+    stale = client(result, [
+        {"type": "input", "value": ""},
+        {"type": "resolve", "url": "search-index.json"},
+    ], hash="#/search?q=needle")
+    assert "全部文稿 · 2 篇" in stale[-1]["results"]
+
+
+def test_public_reader_escapes_body_attribution_and_title(tmp_path):
+    source = record(content='<img src=x onerror="alert(1)">')
+    source["submission"]["episode"]["title"] = "</script><svg onload=alert(1)>"
+    source["submission"]["attribution"] = "<img src=x onerror=alert(1)>"
+    source["provenance"]["payload_sha256"] = submission_digest(source["submission"])
+    result = build_public_site([source], tmp_path)
+    assert "</script><svg" not in result.read_text()
+    url = metadata(result)["episodes"][0]["data_url"]
+    snapshots = client(result, [{"type": "resolve", "url": url}], hash="#/episode/episode-one")
+    assert "<img" not in snapshots[-1]["html"] and "<svg" not in snapshots[-1]["html"]
+    assert "&lt;img" in snapshots[-1]["html"]

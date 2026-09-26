@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1] / "skills/podcast-scribe"
 
 
 def run_script(workspace, name, *args):

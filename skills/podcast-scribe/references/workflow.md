@@ -23,12 +23,15 @@ PS_PYTHON="$PS_SKILL_ROOT/.venv/bin/python"
 
 需要跨项目使用时，可给安装命令加 `-g`，并将 `PS_SKILL_ROOT` 设为安装器输出的 Skill 路径。更新或重新安装可能替换 Skill 目录，届时重新创建 Python 环境；文稿和缓存应始终保留在任务工作区。
 
-也可不使用 npm，将**整个仓库**手动安装到 Codex 的用户 Skill 目录，不能只复制 SKILL.md。以下为首次手动安装命令；已有安装时复用原目录，不重复克隆：
+也可不使用 npm，克隆仓库后将完整的 `skills/podcast-scribe/` 目录复制到 Codex 的用户 Skill 目录，不能只复制 SKILL.md。以下命令在目标不存在时复制文件，目标已存在时复用原安装：
 
 ```sh
 PS_SKILL_ROOT="$HOME/.agents/skills/podcast-scribe"
 mkdir -p "$HOME/.agents/skills"
-git clone https://github.com/aweng126/podcast-scribe.git "$PS_SKILL_ROOT"
+git clone https://github.com/aweng126/podcast-scribe.git podcast-scribe-source
+if [ ! -e "$PS_SKILL_ROOT" ]; then
+  cp -R podcast-scribe-source/skills/podcast-scribe "$PS_SKILL_ROOT"
+fi
 python3 -m venv "$PS_SKILL_ROOT/.venv"
 PS_PYTHON="$PS_SKILL_ROOT/.venv/bin/python"
 "$PS_PYTHON" -m pip install -e "$PS_SKILL_ROOT"
@@ -118,6 +121,11 @@ B站普通网页提取失败时，程序尝试正常公开元数据与播放 API
 "$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" edit data/my-episode/episode.json --edits output/editorial.json
 "$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" validate data/my-episode/episode.json
 "$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" export data/my-episode/episode.json --formats markdown pdf --output-dir output/exports
+```
+
+需要离线阅读页面时，再运行：
+
+```sh
 "$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" site data --preview --output-dir output/preview
 ```
 
@@ -125,7 +133,7 @@ B站普通网页提取失败时，程序尝试正常公开元数据与播放 API
 
 段落整理完成记为 `edited`，疑点记为 `needs_review`，实际核对后才设为 `reviewed`。全部段落为 `reviewed` 后，才能按 schema 更新整集 `review` 字段；若仍有未知说话人，则不能确认整集人物归属。修改正文或归属会重置对应段落状态，普通编辑也会清空整集复核标记。旧稿件出现全局与逐段状态冲突时，通过 `edit` 退回草稿并保留历史，见 [校对状态与兼容修复](schema.md#校对状态)。
 
-完成校对且用户有明确公开意图后：
+社区分享采用独立的 [投稿流程](sharing.md)，不需要先运行 `publish`。只有准备自行部署完整站点时，完成校对且用户有明确公开意图后运行：
 
 ```sh
 "$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" publish data/my-episode/episode.json
@@ -136,21 +144,6 @@ B站普通网页提取失败时，程序尝试正常公开元数据与播放 API
 只有 `output/site/` 是准备部署的静态目录。不要上传 `data/`、缓存、转写原始响应、诊断、编辑历史或 `.venv`。草稿预览与正式构建使用不同输出目录。`publish` 不执行部署、购域名或更改外部账户。
 
 第一版管理入口是 Skill + CLI；尚无网页编辑后台、自动订阅、多用户账户。时间戳链接返回原视频，未实现内嵌同步播放器。画面 OCR、人物人脸识别、截图提取不在第一版范围。
-
-## 开发与验收
-
-开发时在源码目录安装测试依赖并运行：
-
-```sh
-"$PS_PYTHON" -m pip install -e "${PS_SKILL_ROOT}[test]"
-cd "$PS_SKILL_ROOT"
-"$PS_PYTHON" -m pytest -q
-node --check podcast_scribe/assets/app.js
-```
-
-`test` 依赖包含 `pypdf`，PDF 测试不会因遗漏该包而静默跳过。完整测试需要中文字体及 Node.js（页面行为检查）；字体未就绪时先按自检建议配置。独立工作区回归测试覆盖绝对脚本调用、导入、整理、校验、导出和阅读站，验证任务产物留在工作区。可以在新建且未启用系统 site-packages 的虚拟环境中重复安装与测试，检查是否依赖开发者本机环境。
-
-如宿主提供 `skill-creator`，可运行其 `scripts/quick_validate.py` 校验本目录；它是开发辅助工具，不是用户使用本 Skill 的必需依赖。结构测试不能代替全文语义校对或 PDF 视觉验收。
 
 ## 官方接口依据
 

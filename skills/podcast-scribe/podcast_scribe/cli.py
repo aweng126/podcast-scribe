@@ -75,6 +75,12 @@ def parser():
     p.add_argument("--output-dir", type=Path, default=Path("output/exports"))
     p = sub.add_parser("publish", help="将校对完成的单集标为已发布；不执行公网部署")
     p.add_argument("episode", type=Path)
+    p = sub.add_parser("share", help="生成公开投稿 JSON 与 Issue 表单链接；不自动上传或发布")
+    p.add_argument("episode", type=Path)
+    p.add_argument("--attribution", required=True, help="公开展示的投稿署名")
+    p.add_argument("--confirm-public", action="store_true",
+                   help="确认可以公开分享；公开仓库 Issue 与附件在收录审核前即已公开")
+    p.add_argument("--output", type=Path, help="默认 output/share/<id>.json；存在时不会覆盖")
     p = sub.add_parser("site", help="构建静态阅读站；默认仅含已发布节目")
     p.add_argument("episodes", nargs="+", type=Path, help="单集 JSON 文件或含 episode.json 的目录")
     p.add_argument("--output-dir", type=Path,
@@ -134,6 +140,22 @@ def run(args):
         ep.setdefault("artifacts", {}).update({key: str(path.resolve()) for key, path in paths.items()})
         save_episode(args.episode, ep)
         print(json.dumps({key: str(path.resolve()) for key, path in paths.items()}, ensure_ascii=False, indent=2))
+    elif args.command == "share":
+        from .share import canonical_bytes, issue_url, make_submission, submission_digest
+        if not args.confirm_public:
+            raise ContentError("分享前请确认可以公开正文、来源和署名，并提供 --confirm-public；Issue 与附件在审核前即已公开。")
+        submission = make_submission(load_episode(args.episode), attribution=args.attribution)
+        destination = args.output or Path("output/share") / f"{submission['episode']['id']}.json"
+        _new_destination(destination)
+        url = issue_url(submission)
+        payload = canonical_bytes(submission)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("xb") as stream:
+            stream.write(payload)
+        print(json.dumps({"file": str(destination.resolve()), "sha256": submission_digest(submission),
+                          "issue_url": url,
+                          "message": "请先检查公开 JSON，再打开表单、上传该文件并提交。当前仅生成投稿材料，尚未提交；收录审核通过并部署后才会出现在公共阅读站。"},
+                         ensure_ascii=False, indent=2))
     elif args.command == "publish":
         ep = load_episode(args.episode)
         validate_episode(ep, for_publication=True)

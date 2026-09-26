@@ -1,0 +1,46 @@
+name: 分享文稿
+description: 投稿已经整理、校对并确认可以公开分享的文稿。
+title: "[分享] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        使用 Podcast Scribe 的 `share` 命令生成投稿 JSON，再上传到这里。
+        Issue 和附件上传后即公开；审核只决定是否收录到公共阅读站。
+        首次有效投稿将固定为一份内容 PR。修改已固定的文稿请新建 Issue。
+  - type: input
+    id: source_url
+    attributes:
+      label: 来源链接
+      description: 与投稿 JSON 中的来源链接一致。
+    validations:
+      required: true
+  - type: input
+    id: attribution
+    attributes:
+      label: 投稿署名
+      description: 与 share 命令使用的署名一致；会公开展示。
+    validations:
+      required: true
+  - type: input
+    id: content_digest
+    attributes:
+      label: 内容 SHA-256
+      description: share 命令输出的内容摘要，用于固定并验证投稿版本。
+    validations:
+      required: true
+  - type: upload
+    id: attachment
+    attributes:
+      label: 投稿 JSON
+      description: 上传一个 share 命令生成的 .json 文件，最大 2 MiB。
+    validations:
+      required: true
+      accept: ".json"
+  - type: checkboxes
+    id: public_consent
+    attributes:
+      label: 公开分享确认
+      options:
+        - label: 我已检查投稿文件，确认可以公开分享，并同意在本项目及公共阅读站展示。
+          required: true
