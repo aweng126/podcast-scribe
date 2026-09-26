@@ -4,13 +4,11 @@
 
 ## 投稿
 
-1. 完成全文和说话人校对，运行 `share` 生成公开投稿 JSON 和预填 Issue 链接。
-2. 检查 JSON，打开链接，上传该文件，确认可以公开分享后提交。
-3. 自动校验通过后，机器人创建 `community/issue-<编号>` 分支和内容 PR，并在 Issue 留下链接。维护者审核合并后，Pages 自动更新。
+用户从安装、生成文稿到上传、跟踪上线的完整步骤见 [分享、修改与撤稿指引](../skills/podcast-scribe/references/sharing.md#用户完整流程)。Skill 只生成公开 JSON 和预填 Issue 链接，由用户检查后上传提交。
 
-Issue 和附件在收录审核前就已公开。只上传 `share` 生成的文件；不要上传本地 `episode.json`、音频或编辑历史。文件上限为 2 MiB。
+校验通过后，机器人创建 `community/issue-<编号>` 分支和内容 PR，并在 Issue 留下链接。维护者审核合并后，Pages 自动更新。Issue 和附件在收录审核前就已公开，附件上限为 2 MiB。
 
-一个 Issue 对应一份固定快照。首次有效投稿之后，编辑 Issue 或重跑工作流不会更新 PR 中的正文。需要改稿时新建分享 Issue，说明原投稿；维护者关闭旧 PR，或在替换收录时一并移除旧文件。校验失败且尚未生成快照时，可以直接修改 Issue 重试。
+一个 Issue 对应一份固定快照。首次有效投稿之后，编辑 Issue 或重跑工作流不会更新 PR 中的正文。需要改稿时新建分享 Issue，在评论中说明原投稿；不要在投稿表单正文中新增字段，解析器要求保留原有五个字段。校验失败且尚未生成快照时，可以修改原表单重试。
 
 ## 首次启用
 
@@ -21,7 +19,7 @@ Issue 和附件在收录审核前就已公开。只上传 `share` 生成的文�
 3. **Settings → Pages → Build and deployment → Source**：选择 **GitHub Actions**。
 4. 在 **Actions → Deploy community reader → Run workflow** 中选择 `main`，部署首次空目录页面。后续相关 `main` 提交自动部署。
 
-默认站点地址为 `https://aweng126.github.io/podcast-scribe/`。只有 Pages 工作流成功后站点才可用。
+标准访问地址为 `https://aweng126.github.io/podcast-scribe/`；若账号配置了自定义域名，实际地址以 Pages 页面或成功部署的输出为准。只有 Pages 工作流成功后站点才可用。
 
 `Community submission` 创建 PR 若被权限设置阻止，会在 Issue 提示修改上述设置。调整后重跑该次工作流即可恢复；已经生成的快照会保留。
 
@@ -40,7 +38,42 @@ python3 -m http.server 8000 --directory output/site
 
 打开 `http://localhost:8000/`。公共站点按需加载正文，预览需要 HTTP 服务；本地离线 HTML 功能仍通过 Skill 的 `site` 命令使用。
 
-拒绝投稿时关闭对应 PR 并说明原因。已经收录的改稿通过新的内容 PR 替换旧记录，避免同时保留重复单集 ID。撤下文稿时提交删除对应 JSON 的 PR；合并并部署后，阅读站不再展示。Git 历史及 Issue 附件仍可能保留原内容，如需删除公开附件或涉及隐私，应联系仓库维护者和 GitHub 支持进一步处理。
+## 修改已收录文稿
+
+用户修订本地稿并重新校对后，通过新 Issue 投稿，在评论中提供旧 Issue 链接。新投稿 PR 尚未合并时，维护者切换到它的 `community/issue-<新编号>` 分支，删除旧的 `content/episodes/issue-<旧编号>.json`，将删除提交到同一个 PR 分支。核对新增与删除的是同一单集，再运行检查并合并。
+
+同一单集保留原 `id`，直接同时收录新旧记录会触发重复 ID 校验失败。旧稿还未收录时，关闭旧 PR 即可。机器人不会因为评论或 Issue 正文变化而自动替换已固定内容。
+
+## 撤稿与删除
+
+普通投稿人可在原 Issue 评论中申请撤稿，提供阅读链接；无法留言时另开 `[撤稿]` 普通 Issue。维护者核对请求与原投稿账号。当前没有自动撤稿按钮，也不会因评论、关闭或删除 Issue 而自动删除文章。
+
+**PR 尚未合并：** 关闭对应内容 PR，并关闭投稿 Issue，防止后续误合并。如果工作流仍在运行，处理完成后再检查是否生成了新的 PR。关闭 PR 表示不予收录，不等于抹除分支、PR 差异或附件。
+
+**PR 已合并或文稿已上线：** 以原分享 Issue `#17` 为例，维护者在 GitHub 网页执行：
+
+1. 打开仓库 `main` 下的 `content/episodes/issue-17.json`。这里使用原分享 Issue 编号，不是 PR 编号。
+2. 点击文件右上角菜单中的 **Delete file**。
+3. 提交说明填写撤稿原因，选择新建分支并创建 PR；确认差异只删除目标文稿记录。删除文件的网页操作见 [GitHub 说明](https://docs.github.com/en/repositories/working-with-files/managing-files/deleting-files-in-a-repository)。
+4. 等待 `Community validation` 通过，合并到 `main`。内容目录变更会自动触发 `Deploy community reader`。
+5. 等待 **build** 和 **deploy** 均成功，刷新站点，核对目录与搜索不再出现该文章，原阅读链接不能再打开正文，原站内下载链接不可再下载该稿。检查成功后回复原 Issue 说明已下线。
+
+构建器会从当前内容库重新生成目录和搜索索引，不再生成已撤稿的正文与下载；复用输出目录时，还会清理上一轮生成的相应文件。部署失败时，线上旧版本可能仍可访问，不能仅凭删除 PR 合并就报告已撤稿。已经打开的页面可能保留浏览器内存中的旧正文，需要重新加载检查。
+
+已撤稿后重新打开原分享 Issue，不会自动恢复文稿；脚本识别原先已关闭或合并的 PR，要求重新投稿。
+
+### 站点撤稿与彻底清理的区别
+
+| 位置 | 删除公开 JSON 并部署后的结果 |
+| --- | --- |
+| 当前 Pages 站点 | 目录、搜索、正文和站内 Markdown 下载移除。 |
+| 投稿人的本地文件 | 保留，由投稿人自行管理。 |
+| Issue、评论、附件、PR 差异与分支 | 不会自动删除，需要按具体位置分别处理。 |
+| Git 历史、旧 Actions 产物、他人的下载或克隆 | 不会被普通撤稿清除。 |
+
+本仓库属于个人账号，永久删除 Issue 需仓库所有者操作：打开 Issue，在右侧找到 **Delete issue** 并确认。这与关闭 Issue 不同，也不能替代删除内容记录。[GitHub Issue 删除说明](https://docs.github.com/en/issues/tracking-your-work-with-issues/administering-issues/deleting-an-issue)
+
+如果涉及误传隐私，先记录待处理的链接与位置，再核查 Git 历史、PR 引用、附件及部署产物。不要承诺删除附件链接或整个 Issue 就已删除附件存储。历史重写不是普通撤稿步骤；需要独立评估，必要时联系 GitHub 支持。GitHub 对支持范围和他人副本的限制见 [敏感数据清理说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)。
 
 ## 工作流边界
 

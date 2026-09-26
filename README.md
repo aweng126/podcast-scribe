@@ -54,7 +54,9 @@ python3 -m venv "$PS_SKILL_ROOT/.venv"
 使用 $podcast-scribe 为这篇已校对文稿生成公开投稿文件，署名为「我的名字」。
 ```
 
-Skill 生成公开 JSON 和投稿链接。检查文件后，在 Issue 表单中上传并提交；审核合并后会收录到公共阅读站。Issue 和附件提交到公开仓库即对外可见。默认使用始终保存在本地。
+Skill 生成公开 JSON 和投稿链接。检查文件后，在 Issue 表单中上传并提交；审核合并后会收录到公共阅读站。Issue 和附件在审核前即对外可见。默认使用始终保存在本地。
+
+完整步骤见[分享、修改与撤稿指引](skills/podcast-scribe/references/sharing.md)。已收录的文稿由维护者删除对应内容文件并重新部署撤下。
 
 ## 文档
 

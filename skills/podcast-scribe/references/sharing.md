@@ -1,31 +1,119 @@
-# 分享投稿（可选）
+# 分享、修改与撤稿
 
-默认工作流只生成本地文稿。用户主动要求向 Podcast Scribe 社区分享时，才使用本流程；离线阅读页仍是独立的可选输出。
+本地文稿是默认产物，离线阅读页和社区分享均为可选功能。当前分享方式是：Skill 在本地准备文件，用户在 GitHub 上传，维护者审核合并，Pages 自动部署。用户需要 GitHub 账号，无需仓库写入权限或个人访问令牌（PAT）。
 
-## 准备公开文件
+## 用户完整流程
 
-投稿需要实际完成逐段内容校对与人物归属确认，并有摘要、章节和可访问的原节目来源链接。演示记录不能投稿。保留匿名标签可以表示人物身份未知，但不得把尚未核对的发言归属标为已确认。
+### 1. 安装并生成本地文稿
 
-使用用户给定的公开署名，从任务工作区运行：
+在保存文稿的任务工作区执行：
 
 ```sh
-"$PS_PYTHON" "$PS_SKILL_ROOT/scripts/podcast_scribe.py" share data/my-episode/episode.json --attribution '公开署名' --confirm-public
+npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 ```
 
-`--confirm-public` 表示用户选择准备公开分享；不代表维护者已经接受投稿。命令只在本地生成 `output/share/<id>.json` 并输出 Issue 表单链接，不联网、不创建 Issue、不修改本地 `status`。已有同名文件不会覆盖；修订后用 `--output` 指定新文件。
+需要 Node.js/npm 和 Python 3.10+。音视频转写、PDF 所需环境按 [安装与运行](workflow.md#安装与首次调用) 配置；已有转写的 Markdown 导出和分享准备只需 Python 标准库。
 
-公开 JSON 仅包含整理后的正文、说话人、时间戳、摘要、章节、来源及公开署名；不包含原始转写 `raw_text`、编辑历史、音频缓存和本地导出路径。公开字段中的文字与来源链接仍需检查，程序不会自动识别正文中的私人信息。
+在 Codex 中调用，例如：
 
-## 投稿与收录
+```text
+使用 $podcast-scribe 整理 ./input.json，原节目链接是 <来源链接>。
+保留完整对话、说话人与时间戳，生成摘要、章节和 Markdown，暂不分享。
+```
 
-1. 给出生成文件的实际路径与投稿链接，让用户检查待公开内容。授权已经覆盖这些内容时，不重复询问公开意图。
-2. 用户在 GitHub 表单中上传该 JSON，确认可公开分享后提交。需要 GitHub 账户；JSON 附件最大 2 MiB。不要上传本地工作区的原始 `episode.json`、音频或整个目录。
-3. 自动流程校验投稿，生成一份固定内容的 PR；维护者审核合并后，由 Actions 构建并部署公共阅读站。结构校验通过不表示内容已经审核。
+也可将输入换成 B站链接或本地音视频。得到本地单集 JSON 和 Markdown 后检查全文；离线页面仅在需要时另外请求生成。
 
-公开仓库中的 Issue 与附件本身就可被他人访问；审核不提供私密暂存。文件上传时即应视为公开，不必等 Issue 提交或站点上线。只处理用户明确选择分享的内容。
+### 2. 完成校对
 
-首次有效投稿会固定成审核快照。之后编辑 Issue 不会替换 PR 中的正文；需要修订时按仓库维护说明重新投稿。撤回或纠错可在原 Issue 中联系维护者。
+要求 Agent 核对全文、数字、否定、时间戳及说话人归属，逐段记录实际校对结果。不能只把状态改成“已校对”来通过投稿检查。
 
-只生成文件时报告“投稿文件已准备”；获得实际 Issue URL 后才能报告“已投稿”，确认 Pages 部署成功后才能报告“已上线”。本地 `publish` 不等于社区投稿，也不需要作为 `share` 的前置步骤。
+投稿需要全部段落已核对、人物归属已确认、有摘要、章节和原节目来源链接。未知真名可以保留匿名标签；无法确认谁在说话时仍不能投稿。只有输入转写可供核对时，应在文稿中说明核对范围，不声称听音复核。具体状态见 [校对约定](schema.md#校对状态)。演示记录不能作为真实节目投稿。
 
-[仓库投稿与部署说明](https://github.com/aweng126/podcast-scribe/blob/main/docs/community.md)
+### 3. 准备公开投稿文件
+
+确认可以公开后，对 Agent 说：
+
+```text
+使用 $podcast-scribe 为 ./data/my-episode/episode.json 生成公开投稿文件。
+署名为「我的名字」。我确认可以公开分享这些内容，请给我文件路径和投稿链接。
+```
+
+将路径换成实际生成的单集 JSON。Skill 输出：
+
+| 输出 | 用途 |
+| --- | --- |
+| `output/share/<id>.json` | 要上传的公开正文和元数据。 |
+| `sha256` | 当前投稿内容的校验摘要。 |
+| `issue_url` | 预填 Issue 表单链接。 |
+
+检查公开文件中的正文、人物信息、来源链接及署名。文件不包含原始转写 `raw_text`、编辑历史、音频缓存或本地导出路径，但程序不会自动识别正文中的私人信息。
+
+此时仅生成本地材料，尚未提交到 GitHub；本地单集状态保持不变。无需先运行 `publish`，也无需生成离线站点。
+
+### 4. 上传并提交 Issue
+
+1. 登录 GitHub，打开 Skill 输出的 `issue_url`。保留标题的 `[分享]` 前缀。
+2. 检查“来源链接”“投稿署名”“内容 SHA-256”。链接中未预填的内容，从公开 JSON 和命令输出补齐；来源与署名必须与 JSON 一致。
+3. 在“投稿 JSON”中上传刚生成的文件，最大 2 MiB。不要上传本地工作区的原始 `episode.json`、音频或整个目录。
+4. 勾选公开分享确认，提交 Issue，并保存其链接。
+
+公开仓库的附件上传时就可被他人读取，不必等 Issue 提交或审核通过。请在上传前检查文件。[GitHub 附件说明](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files)
+
+### 5. 跟踪审核与上线
+
+机器人在 Issue 下反馈结果。校验成功后，会给出内容 PR 和部署成功后可用的阅读链接。
+
+- **校验失败**：根据反馈修正；尚未生成内容快照时，可以更新原 Issue 的表单字段重试。
+- **等待审核**：维护者检查 PR。结构校验通过不表示内容已获收录。
+- **PR 已合并**：等待 `Deploy community reader` 部署成功，再打开阅读链接。实际站点地址以部署结果或仓库 Pages 页面为准。
+
+首次有效投稿会固定为审核快照。之后编辑 Issue 不会替换 PR 中的正文。仅关闭或删除 Issue，也不会撤销已有 PR 或已收录文章。
+
+## 修改已投稿文稿
+
+在本地使用 `edit` 修订并重新校对；运行 `share --output` 生成新的公开文件和摘要，再新建分享 Issue。保留同一单集的 `id`，并在新 Issue 的评论中注明原 Issue 和需要替换的文章；不要给投稿表单正文添加额外字段，也不要改用新附件却保留旧摘要。
+
+旧稿尚未合并时，由维护者关闭旧 PR。旧稿已经收录时，由维护者在新投稿 PR 中同时移除旧记录，审核后一起合并，避免两个记录使用同一个单集 ID。用户不需要自行修改仓库文件。
+
+## 撤回或删除
+
+当前没有用户自助删除按钮或 `unshare` 命令。按所在阶段处理：
+
+| 当前阶段 | 用户操作 | 维护者操作与结果 |
+| --- | --- | --- |
+| 只在本地生成分享文件，未上传 | 不提交即可，按需删除自己的本地分享文件。 | 无需处理，远程没有这次投稿。 |
+| 已提交 Issue，PR 尚未合并 | 在原 Issue 留下撤回请求，并关闭 Issue。 | 检查并关闭关联 PR，防止之后合并；不会仅因关闭 Issue 而自动撤销 PR。 |
+| 已合并或已上线 | 在原 Issue 评论中申请撤稿，附文章链接；原 Issue 无法留言时，另建标题以 `[撤稿]` 开头的普通 Issue。 | 删除 `content/episodes/issue-<原投稿编号>.json`，经 PR 合并并部署后从公共站移除。 |
+
+请求示例：
+
+```text
+我是原投稿人，请撤下 Issue #17 对应的文稿。
+文章链接：<阅读链接>
+撤稿原因：<可选说明，不要再次粘贴敏感内容>
+```
+
+若只上传附件、尚未提交 Issue，停止提交即可；已上传附件仍按公开文件处理，不能认为未提交 Issue 就没有上传。
+
+撤稿部署完成后，新加载的站点目录、搜索结果、正文和站内 Markdown 下载均不再包含该稿。用户本地原始文稿、已经下载的副本、旧部署产物、Git 历史和 Issue 附件不会因此一并消失。关闭 Issue、删除附件链接或只删除本地文件都不能代替站点撤稿。
+
+若涉及误传隐私，联系维护者说明需要处理的具体位置；Git 历史、PR 引用与附件需分别核查，不承诺撤稿等于彻底擦除。GitHub 对历史数据及他人副本的限制见 [敏感数据清理说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)。维护者操作见 [社区维护说明](https://github.com/aweng126/podcast-scribe/blob/main/docs/community.md#撤稿与删除)。
+
+## CLI 与 Agent 操作
+
+从任务工作区运行安装目录的脚本。项目安装且只准备分享时，可直接使用系统 Python：
+
+```sh
+PS_SKILL_ROOT="$PWD/.agents/skills/podcast-scribe"
+python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" share data/my-episode/episode.json --attribution '公开署名' --confirm-public
+```
+
+全局安装时将 `PS_SKILL_ROOT` 换成实际安装路径。`--confirm-public` 表示用户选择准备公开分享，不表示已经投稿或获准收录。命令不联网、不打开浏览器、不创建 Issue，也不修改本地单集。
+
+已有同名输出不会覆盖。修订并完成校对后，指定新文件：
+
+```sh
+python3 "$PS_SKILL_ROOT/scripts/podcast_scribe.py" share data/my-episode/episode.json --attribution '公开署名' --confirm-public --output output/share/my-episode-v2.json
+```
+
+Agent 只处理用户选择公开的内容；已有授权覆盖的公开意图无需重复确认。只生成文件时报告“投稿文件已准备”；获得实际 Issue URL 后才能报告“已投稿”，确认 Pages 部署成功后才能报告“已上线”。收到撤稿请求时说明上述当前流程，不声称关闭 Issue 或修改本地 `status` 已完成下线。
