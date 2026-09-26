@@ -80,6 +80,41 @@ def test_srt_unknown_people_can_be_assigned_without_guessing(tmp_path):
     assert changed["segments"][0]["speaker_id"] == "person-a"
 
 
+@pytest.mark.parametrize("field", ["text", "content"])
+@pytest.mark.parametrize("value", [None, 123, False, [], {}])
+def test_cli_rejects_non_string_transcript_without_partial_output(tmp_path, capsys, field, value):
+    source, output = tmp_path / "source.json", tmp_path / "episode.json"
+    rows = [{"start": 0, "end": 1, field: "有效正文"},
+            {"start": 1, "end": 2, field: value}]
+    source.write_text(json.dumps({"body" if field == "content" else "segments": rows}), encoding="utf-8")
+    assert main(["import", str(source), "--id", "invalid", "--title", "输入校验", "--output", str(output)]) == 2
+    assert "第 2 段转写文本必须是字符串" in capsys.readouterr().err
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("field", ["text", "content"])
+def test_transcript_import_preserves_strings_and_skips_blank_rows(tmp_path, field):
+    source = tmp_path / "source.json"
+    source.write_text(json.dumps([
+        {"start": 0, "end": 1},
+        {"start": 1, "end": 2, field: " \n "},
+        {"start": 2, "end": 3, field: " 007 "},
+        {"start": 3, "end": 4, field: "None"},
+    ]), encoding="utf-8")
+    segments, speakers = read_transcript(source)
+    assert [s["text"] for s in segments] == ["007", "None"]
+    assert [s["raw_text"] for s in segments] == ["007", "None"]
+    assert [s["id"] for s in segments] == ["seg-00001", "seg-00002"]
+    assert speakers == []
+
+
+def test_transcript_text_field_takes_precedence_over_content():
+    with pytest.raises(ContentError, match="文本必须是字符串"):
+        normalize_segments([{"start": 0, "end": 1, "text": None, "content": "备用文字"}])
+    segments, _ = normalize_segments([{"start": 0, "end": 1, "text": "正文", "content": None}])
+    assert segments[0]["text"] == "正文"
+
+
 def test_cli_refuses_reimport_over_edits_and_stores_history(tmp_path, capsys):
     source, output, edits = tmp_path / "source.json", tmp_path / "episode.json", tmp_path / "edits.json"
     source.write_text(json.dumps({"segments": [{"start": 0, "end": 2, "text": "原始文字", "speaker": "A"}]}))

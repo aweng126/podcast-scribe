@@ -19,10 +19,13 @@ def _seconds(value: str) -> float:
 
 def normalize_segments(rows: list[dict]) -> tuple[list[dict], list[dict]]:
     segments, people, mapping = [], [], {}
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
             raise ContentError("转写段落必须是对象")
-        text = str(row.get("text", row.get("content", ""))).strip()
+        text = row.get("text", row.get("content", ""))
+        if not isinstance(text, str):
+            raise ContentError(f"第 {index} 段转写文本必须是字符串")
+        text = text.strip()
         if not text:
             continue
         speaker = row.get("speaker_id", row.get("speaker"))
