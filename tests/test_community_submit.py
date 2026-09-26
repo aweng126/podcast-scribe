@@ -210,10 +210,11 @@ def test_attachment_download_has_no_token_and_is_bounded(submission, monkeypatch
     class Opener:
         def open(self, request, timeout):
             assert not request.has_header("Authorization")
-            assert timeout == 20
+            assert timeout == 60
             return Response(canonical_bytes(submission))
     monkeypatch.setattr(intake, "build_opener", lambda *args: Opener())
     assert intake.download_submission(ATTACHMENT) == submission
+    monkeypatch.setattr(intake, "MAX_SUBMISSION_BYTES", 4096)
     monkeypatch.setattr(Opener, "open", lambda *args, **kwargs: Response(b"x" * (intake.MAX_SUBMISSION_BYTES + 1)))
     with pytest.raises(intake.IntakeError, match="超过"):
         intake.download_submission(ATTACHMENT)
@@ -240,3 +241,76 @@ def test_rejects_spoofed_event_identity(submission, mutation):
     if mutation == "pr": event["issue"]["pull_request"] = {"url": "example"}
     with pytest.raises(intake.IntakeError):
         intake.event_identity(event, intake.REPOSITORY)
+
+
+def test_release_download_urls_and_redirects_are_strict(submission, monkeypatch):
+    release = "https://github.com/contributor/manuscripts/releases/download/share-v1/episode.json"
+    assert intake.attachment_url(f"[episode.json]({release})") == release
+    assert intake.allowed_download(release)
+    assert intake.allowed_download("https://release-assets.githubusercontent.com/github-production-release-asset/123/file?sig=abc")
+    for url in [release.replace("/share-v1/", "/../"), release + "?token=secret",
+                release.replace("github.com", "github.com.evil"), release.replace(".json", ".zip"),
+                "https://release-assets.githubusercontent.com/untrusted/path"]:
+        assert not intake.allowed_download(url)
+    event = issue_event(submission)
+    event["issue"]["body"] = event["issue"]["body"].replace(ATTACHMENT, release)
+    assert intake.make_record(event, intake.REPOSITORY, lambda url: submission)["submission"] == submission
+
+
+def test_chunked_submission_freezes_all_parts_and_recovers_without_download(submission, monkeypatch):
+    import podcast_scribe.public_storage as storage
+    monkeypatch.setattr(storage, "PART_BYTES", 1024)
+    # Intake's read guard also reflects the deliberately small simulated limit.
+    monkeypatch.setattr(intake, "PART_BYTES", 4096)
+    submission["episode"]["segments"][0]["text"] = "公开内容" * 300
+    original = intake.make_record(issue_event(submission), intake.REPOSITORY, lambda url: submission)
+
+    class LargeAPI(FakeAPI):
+        def __init__(self):
+            super().__init__()
+            self.blobs, self.paths = {}, {}
+        def call(self, method, path, data=None, **kwargs):
+            if method == "POST" and path == "/git/blobs":
+                self.calls.append((method, path, deepcopy(data)))
+                sha = f"{len(self.blobs) + 1:040x}"
+                self.blobs[sha] = base64.b64decode(data["content"])
+                return {"sha": sha}
+            if method == "POST" and path == "/git/trees":
+                self.paths = {entry["path"]: self.blobs[entry["sha"]] for entry in data["tree"]}
+                return {"sha": "treesha"}
+            if method == "GET" and path.startswith("/compare/"):
+                return {"files": [{"filename": name, "status": "added"} for name in self.paths]}
+            if method == "GET" and path.startswith("/contents/") and "?ref=community" in path:
+                payload = self.paths[path.removeprefix("/contents/").split("?")[0]]
+                return {"type": "file", "encoding": "base64", "content": base64.b64encode(payload).decode(), "size": len(payload)}
+            return super().call(method, path, data, **kwargs)
+    api = LargeAPI()
+    event = issue_event(submission)
+    intake.freeze_submission(api, event, intake.REPOSITORY, lambda url: submission)
+    assert len(api.paths) > 2 and set(api.paths) == {"content/episodes/" + name for name, _ in storage.stored_files(original, 12)}
+    assert all(len(payload) <= 4096 for payload in api.paths.values())
+    api.pulls = []  # Simulate branch creation succeeding before the PR request failed.
+    api.calls.clear()
+    intake.freeze_submission(api, event, intake.REPOSITORY, lambda url: pytest.fail("Frozen content must not be downloaded again"))
+    assert api.pulls and all(method != "PATCH" for method, _, _ in api.calls)
+    api.pulls = []
+    part = next(name for name in api.paths if name.endswith(".bin"))
+    api.paths[part] = b"x" + api.paths[part][1:]
+    with pytest.raises(ValueError, match="digest"):
+        intake.freeze_submission(api, event, intake.REPOSITORY)
+
+
+@pytest.mark.parametrize("code,path", [(429, "/git/blobs"), (403, "/pulls")])
+def test_github_secondary_limit_retry_is_bounded_and_respects_header(monkeypatch, code, path):
+    api = intake.GitHub("test-token", intake.REPOSITORY)
+    attempts, sleeps = [], []
+    class Opener:
+        def open(self, request, timeout):
+            attempts.append(request)
+            if len(attempts) < 3:
+                raise HTTPError(request.full_url, code, "secondary limit", {"Retry-After": "2"}, None)
+            return Response(b'{"sha":"ok"}')
+    api.opener = Opener()
+    monkeypatch.setattr(intake.time, "sleep", sleeps.append)
+    assert api.call("POST", path, {"content": "public"}) == {"sha": "ok"}
+    assert len(attempts) == 3 and sleeps.count(2) == 2

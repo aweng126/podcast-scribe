@@ -15,7 +15,7 @@ jobs:
   submission:
     if: startsWith(github.event.issue.title, '[分享]')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write

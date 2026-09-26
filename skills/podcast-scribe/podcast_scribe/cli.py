@@ -69,6 +69,17 @@ def parser():
     p = sub.add_parser("edit", help="按稳定 ID 应用整理稿、人物、摘要、章节和校对状态")
     p.add_argument("episode", type=Path)
     p.add_argument("--edits", type=Path, required=True)
+    p.add_argument("--batch", type=Path, help="校验 batch 的版本与内容摘要，仅允许修改本批目标段落")
+    p = sub.add_parser("status", help="查看精简校对进度，不输出全文")
+    p.add_argument("episode", type=Path)
+    p = sub.add_parser("batch", help="按字符预算读取完整段落，默认跳过已校对段落")
+    p.add_argument("episode", type=Path)
+    p.add_argument("--max-chars", type=int, default=6000, help="完整紧凑 JSON 的字符上限，默认 6000")
+    p.add_argument("--after", help="从此稳定段落 ID 之后续读")
+    p.add_argument("--include-reviewed", action="store_true", help="同时读取已校对段落")
+    p.add_argument("--context-chars", type=int, default=300, help="前后各最多保留的上下文字符数，默认 300")
+    p.add_argument("--raw", action="store_true", help="按需读取原始转写，替代当前正文视图")
+    p.add_argument("--output", type=Path, help="另存同一紧凑 JSON，供 edit --batch 校验")
     p = sub.add_parser("export", help="从单集 JSON 导出文稿")
     p.add_argument("episode", type=Path)
     p.add_argument("--formats", nargs="+", choices=["markdown", "pdf"], default=["markdown", "pdf"])
@@ -111,23 +122,48 @@ def run(args):
         work = args.cache / safe_id(metadata["id"])
         write_json(work / "metadata.json", metadata)
         audio = fetch_audio(args.url, work)
-        segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language)
+        audio_metadata = {}
+        segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language,
+                                             metadata=audio_metadata)
+        metadata["duration_seconds"] = max(metadata.get("duration_seconds") or 0,
+                                           audio_metadata.get("duration_seconds") or 0)
         _save_new(args, metadata, segments, speakers)
     elif args.command in ("transcribe", "import"):
         _new_destination(args.output)
+        audio_metadata = {}
         if args.command == "transcribe":
             from .transcribe import transcribe_audio
-            segments, speakers = transcribe_audio(args.file, args.cache / "asr", language=args.language)
+            segments, speakers = transcribe_audio(args.file, args.cache / "asr", language=args.language,
+                                                 metadata=audio_metadata)
         else:
             from .transcripts import read_transcript
             segments, speakers = read_transcript(args.file)
         metadata = {"id": args.id or args.file.stem, "title": args.title or args.file.stem,
+                    "duration_seconds": audio_metadata.get("duration_seconds", 0),
                     "source": {"platform": "bilibili" if "bilibili.com" in args.source_url else "local",
                                "url": args.source_url, "author": ""}}
         _save_new(args, metadata, segments, speakers)
+    elif args.command == "status":
+        from .editing import compact_json, editing_status
+        print(compact_json(editing_status(load_episode(args.episode))), end="")
+    elif args.command == "batch":
+        from .editing import compact_json, read_batch
+        batch = read_batch(load_episode(args.episode), max_chars=args.max_chars, after=args.after,
+                           include_reviewed=args.include_reviewed, context_chars=args.context_chars, raw=args.raw)
+        content = compact_json(batch)
+        if args.output:
+            _new_destination(args.output)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("x", encoding="utf-8") as stream:
+                stream.write(content)
+        print(content, end="")
     elif args.command == "edit":
         before = load_episode(args.episode, for_edit=True)
-        after = apply_edits(before, _read(args.edits))
+        edits = _read(args.edits)
+        if args.batch:
+            from .editing import validate_batch_edits
+            validate_batch_edits(before, edits, _read(args.batch))
+        after = apply_edits(before, edits)
         backup = args.episode.parent / "history" / f"{before['id']}-r{before.get('revision', 1)}.json"
         if not backup.exists():
             write_json(backup, before)
@@ -152,9 +188,12 @@ def run(args):
         destination.parent.mkdir(parents=True, exist_ok=True)
         with destination.open("xb") as stream:
             stream.write(payload)
+        upload_hint = ("文件超过 Issue 附件限制，请先上传到公开 GitHub Release，再将 .json 资产直链填入投稿表单。"
+                       if len(payload) > 25_000_000 else "请在投稿表单中上传该 JSON 文件。")
         print(json.dumps({"file": str(destination.resolve()), "sha256": submission_digest(submission),
+                          "size_bytes": len(payload),
                           "issue_url": url,
-                          "message": "请先检查公开 JSON，再打开表单、上传该文件并提交。当前仅生成投稿材料，尚未提交；收录审核通过并部署后才会出现在公共阅读站。"},
+                          "message": "请先检查公开 JSON。" + upload_hint + "当前仅生成投稿材料，尚未提交；收录审核通过并部署后才会出现在公共阅读站。"},
                          ensure_ascii=False, indent=2))
     elif args.command == "publish":
         ep = load_episode(args.episode)

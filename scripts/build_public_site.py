@@ -11,8 +11,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills" / "podcast-scribe"))
 
-from podcast_scribe.public_site import build_public_site, loads_record  # noqa: E402
+from podcast_scribe.public_site import build_public_site  # noqa: E402
 from podcast_scribe.share import MAX_SUBMISSION_BYTES  # noqa: E402
+from podcast_scribe.public_storage import load_stored_record  # noqa: E402
 
 
 def load_records(directory: Path) -> list[dict]:
@@ -31,7 +32,14 @@ def load_records(directory: Path) -> list[dict]:
         if path.stat().st_size > MAX_SUBMISSION_BYTES + 4096:
             raise ValueError(f"Public record is too large: {path.name}")
         with path.open("rb") as stream:
-            record = loads_record(stream.read(MAX_SUBMISSION_BYTES + 4097))
+            payload = stream.read(MAX_SUBMISSION_BYTES + 4097)
+        def read_part(name, size):
+            target = directory / name
+            if target.parent.is_symlink() or target.is_symlink() or not target.is_file():
+                raise ValueError(f"Public part must be a regular file: {name}")
+            with target.open("rb") as stream:
+                return stream.read(size + 1)
+        record = load_stored_record(payload, int(match[1]), read_part)
         if record["provenance"]["issue_url"].rsplit("/", 1)[1] != match[1]:
             raise ValueError(f"Public record filename must match its source Issue: {path.name}")
         records.append(record)

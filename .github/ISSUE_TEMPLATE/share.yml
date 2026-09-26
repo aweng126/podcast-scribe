@@ -29,14 +29,13 @@ body:
       description: share 命令输出的内容摘要，用于固定并验证投稿版本。
     validations:
       required: true
-  - type: upload
+  - type: textarea
     id: attachment
     attributes:
       label: 投稿 JSON
-      description: 上传一个 share 命令生成的 .json 文件，最大 2 MiB。
+      description: share 生成的 JSON 最大 512 MiB。25 MB 以内可拖入此处；更大文件请上传自己公开仓库的 Release，再粘贴唯一一个以 .json 结尾的资产下载链接。
     validations:
       required: true
-      accept: ".json"
   - type: checkboxes
     id: public_consent
     attributes:

@@ -16,7 +16,7 @@ from urllib.parse import urlencode, urlsplit
 from .model import ContentError, validate_episode
 
 
-MAX_SUBMISSION_BYTES = 2 * 1024 * 1024
+MAX_SUBMISSION_BYTES = 512 * 1024 * 1024
 MAX_DURATION_SECONDS = 7 * 24 * 60 * 60
 _EPISODE_FIELDS = {
     "id", "title", "description", "source", "series", "duration_seconds",
@@ -62,15 +62,31 @@ def _time(value, label):
         raise ContentError(f"{label} 必须是 0–{MAX_DURATION_SECONDS} 范围内的有限秒数")
 
 
-def _encoded(data):
+def _encoded_chunks(data):
     try:
-        content = (json.dumps(data, ensure_ascii=False, sort_keys=True,
-                              indent=2, allow_nan=False) + "\n").encode("utf-8")
+        encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
+        for chunk in encoder.iterencode(data):
+            yield chunk.encode("utf-8")
+        yield b"\n"
     except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
         raise ContentError("投稿必须是有效的 UTF-8 JSON 数据") from exc
-    if len(content) > MAX_SUBMISSION_BYTES:
-        raise ContentError("公开投稿文件不能超过 2 MiB")
-    return content
+
+
+def _encoded(data):
+    content = bytearray()
+    for chunk in _encoded_chunks(data):
+        content.extend(chunk)
+        if len(content) > MAX_SUBMISSION_BYTES:
+            raise ContentError("公开投稿文件不能超过 512 MiB")
+    return bytes(content)
+
+
+def _check_encoded_size(data):
+    total = 0
+    for chunk in _encoded_chunks(data):
+        total += len(chunk)
+        if total > MAX_SUBMISSION_BYTES:
+            raise ContentError("公开投稿文件不能超过 512 MiB")
 
 
 def _render_episode(data):
@@ -148,7 +164,7 @@ def validate_submission(data: dict) -> dict:
         _url(reference["url"], "reference.url")
     # Reuse cross-reference, unique ID, chronological and publication checks.
     validate_episode(_render_episode(data), for_publication=True)
-    _encoded(data)
+    _check_encoded_size(data)
     return data
 
 
@@ -186,7 +202,7 @@ def loads_submission(payload: bytes) -> dict:
     if not isinstance(payload, bytes):
         raise ContentError("投稿 JSON 需要 UTF-8 字节")
     if len(payload) > MAX_SUBMISSION_BYTES:
-        raise ContentError("公开投稿文件不能超过 2 MiB")
+        raise ContentError("公开投稿文件不能超过 512 MiB")
     try:
         data = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_object)
     except (UnicodeError, ValueError, RecursionError) as exc:
@@ -211,7 +227,11 @@ def canonical_bytes(data: dict) -> bytes:
 
 
 def submission_digest(data: dict) -> str:
-    return hashlib.sha256(canonical_bytes(data)).hexdigest()
+    validate_submission(data)
+    digest = hashlib.sha256()
+    for chunk in _encoded_chunks(data):
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 def issue_url(submission: dict, repository: str = "aweng126/podcast-scribe") -> str:

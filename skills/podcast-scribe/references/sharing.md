@@ -62,10 +62,20 @@ npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 
 1. 登录 GitHub，打开 Skill 输出的 `issue_url`。保留标题的 `[分享]` 前缀。
 2. 检查“来源链接”“投稿署名”“内容 SHA-256”。链接中未预填的内容，从公开 JSON 和命令输出补齐；来源与署名必须与 JSON 一致。
-3. 在“投稿 JSON”中上传刚生成的文件，最大 2 MiB。不要上传本地工作区的原始 `episode.json`、音频或整个目录。
+3. 在“投稿 JSON”中提供刚生成的文件，最大 **512 MiB**。25 MB 以内可直接拖入文本框；更大的文件先上传到自己公开仓库的 Release，再粘贴唯一一个 `.json` 资产下载链接。不要上传本地工作区的原始 `episode.json`、音频或整个目录。
 4. 勾选公开分享确认，提交 Issue，并保存其链接。
 
+大文件上传步骤：在自己的公开 GitHub 仓库中打开 **Releases → Draft a new release**，填写新标签（例如 `share-v1`），在附件区上传 `share` 生成的 JSON，发布 Release，然后复制该资产的直接下载链接，格式如下：
+
+```text
+https://github.com/<你的账号>/<你的仓库>/releases/download/share-v1/my-episode.json
+```
+
+只填写这一个链接，保留原有来源、署名和 SHA-256。使用由字母、数字、下划线、点、短横线组成的标签和 `.json` 文件名。不要填 Release 页面地址、私有资产、临时下载签名地址或网盘链接。仓库和资产由用户自行公开；Skill 不自动上传。机器人会下载并核验内容，将固定副本保存在本项目中，后续修改原资产不会替换审核快照。
+
 公开仓库的附件上传时就可被他人读取，不必等 Issue 提交或审核通过。请在上传前检查文件。[GitHub 附件说明](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files)
+
+512 MiB 是公开 JSON 的上限，不是音频上传额度。超过 1 MiB 正文的大稿在阅读站按页加载，目录可跨页跳转；站内搜索只索引这类大稿的标题、系列、人物和摘要。点击完整 Markdown 下载时才逐页获取全文，浏览器会临时占用与全文大小相当的资源。
 
 ### 5. 跟踪审核与上线
 
@@ -91,7 +101,7 @@ npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 | --- | --- | --- |
 | 只在本地生成分享文件，未上传 | 不提交即可，按需删除自己的本地分享文件。 | 无需处理，远程没有这次投稿。 |
 | 已提交 Issue，PR 尚未合并 | 在原 Issue 留下撤回请求，并关闭 Issue。 | 检查并关闭关联 PR，防止之后合并；不会仅因关闭 Issue 而自动撤销 PR。 |
-| 已合并或已上线 | 在原 Issue 评论中申请撤稿，附文章链接；原 Issue 无法留言时，另建标题以 `[撤稿]` 开头的普通 Issue。 | 删除 `content/episodes/issue-<原投稿编号>.json`，经 PR 合并并部署后从公共站移除。 |
+| 已合并或已上线 | 在原 Issue 评论中申请撤稿，附文章链接；原 Issue 无法留言时，另建标题以 `[撤稿]` 开头的普通 Issue。 | 删除 `content/episodes/issue-<原投稿编号>.json` 及存在的同名分片目录 `issue-<原投稿编号>/`，经 PR 合并并部署后从公共站移除。 |
 
 请求示例：
 
@@ -103,7 +113,7 @@ npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 
 若只上传附件、尚未提交 Issue，停止提交即可；已上传附件仍按公开文件处理，不能认为未提交 Issue 就没有上传。
 
-撤稿部署完成后，新加载的站点目录、搜索结果、正文和站内 Markdown 下载均不再包含该稿。用户本地原始文稿、已经下载的副本、旧部署产物、Git 历史和 Issue 附件不会因此一并消失。关闭 Issue、删除附件链接或只删除本地文件都不能代替站点撤稿。
+撤稿部署完成后，新加载的站点目录、搜索结果、正文和站内 Markdown 下载均不再包含该稿。用户本地原始文稿、已经下载的副本、旧部署产物、Git 历史、Issue 附件和原 Release 资产不会因此一并消失。关闭 Issue、删除附件链接或只删除本地文件都不能代替站点撤稿。
 
 若涉及误传隐私，联系维护者说明需要处理的具体位置；Git 历史、PR 引用与附件需分别核查，不承诺撤稿等于彻底擦除。GitHub 对历史数据及他人副本的限制见 [敏感数据清理说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)。维护者操作见 [社区维护说明](https://github.com/aweng126/podcast-scribe/blob/main/docs/community.md#撤稿与删除)。
 

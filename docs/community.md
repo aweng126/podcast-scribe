@@ -6,7 +6,7 @@
 
 用户从安装、生成文稿到上传、跟踪上线的完整步骤见 [分享、修改与撤稿指引](../skills/podcast-scribe/references/sharing.md#用户完整流程)。Skill 只生成公开 JSON 和预填 Issue 链接，由用户检查后上传提交。
 
-校验通过后，机器人创建 `community/issue-<编号>` 分支和内容 PR，并在 Issue 留下链接。维护者审核合并后，Pages 自动更新。Issue 和附件在收录审核前就已公开，附件上限为 2 MiB。
+校验通过后，机器人创建 `community/issue-<编号>` 分支和内容 PR，并在 Issue 留下链接。维护者审核合并后，Pages 自动更新。Issue 和附件在收录审核前就已公开，公开 JSON 上限为 512 MiB；GitHub Issue 普通附件仍受平台的 25 MB 限制，更大文件使用投稿者公开仓库的 Release JSON 资产直链。
 
 一个 Issue 对应一份固定快照。首次有效投稿之后，编辑 Issue 或重跑工作流不会更新 PR 中的正文。需要改稿时新建分享 Issue，在评论中说明原投稿；不要在投稿表单正文中新增字段，解析器要求保留原有五个字段。校验失败且尚未生成快照时，可以修改原表单重试。
 
@@ -27,20 +27,20 @@
 
 审核 PR 的公开 JSON、来源、署名及 Issue 中的公开分享确认，查看 `Community validation` 检查结果，再由维护者合并。机器人创建的 PR 检查可能显示等待批准，维护者需要批准运行。不要启用投稿自动合并。
 
-正式数据保存在 `content/episodes/issue-<编号>.json`，包含公开投稿、来源 Issue、投稿账号和内容 SHA-256。生成的页面及下载文件只作为 Actions 部署产物。构建会拒绝重复单集 ID、重复投稿、错误摘要、额外字段和不安全路径。
+正式数据保存在 `content/episodes/issue-<编号>.json`。小稿保留单文件格式，超过 4 MiB 的记录使用此文件作为清单，正文存为 `content/episodes/issue-<编号>/part-00000.bin` 等 4 MiB 分片；每片和完整记录均有 SHA-256，重跑只能恢复同一快照。重组后的记录包含公开投稿、来源 Issue、投稿账号和内容 SHA-256。生成的页面及下载文件只作为 Actions 部署产物。构建会拒绝重复单集 ID、重复投稿、错误摘要、额外字段和不安全路径。
 
-本地检查与预览：
+大稿的 `.bin` 分片不适合直接在 GitHub 差异页阅读。先确认 PR 只新增该投稿的数据文件，在干净的本地工作区检出该内容 PR（例如 `gh pr checkout <PR编号>`），然后运行：
 
 ```sh
 python3 scripts/build_public_site.py --content-dir content/episodes --output-dir output/site
-python3 -m http.server 8000 --directory output/site
+python3 -m http.server 8000 --bind 127.0.0.1 --directory output/site
 ```
 
-打开 `http://localhost:8000/`。公共站点按需加载正文，预览需要 HTTP 服务；本地离线 HTML 功能仍通过 Skill 的 `site` 命令使用。
+打开 `http://127.0.0.1:8000/`，逐页核对正文、说话人、章节、来源和署名；构建器会自动重组并核验所有分片摘要。仅结构检查通过不能替代人工审阅正文，确认后再合并。公共站点按需加载正文，预览需要 HTTP 服务；本地离线 HTML 功能仍通过 Skill 的 `site` 命令使用。
 
 ## 修改已收录文稿
 
-用户修订本地稿并重新校对后，通过新 Issue 投稿，在评论中提供旧 Issue 链接。新投稿 PR 尚未合并时，维护者切换到它的 `community/issue-<新编号>` 分支，删除旧的 `content/episodes/issue-<旧编号>.json`，将删除提交到同一个 PR 分支。核对新增与删除的是同一单集，再运行检查并合并。
+用户修订本地稿并重新校对后，通过新 Issue 投稿，在评论中提供旧 Issue 链接。新投稿 PR 尚未合并时，维护者切换到它的 `community/issue-<新编号>` 分支，删除旧的 `content/episodes/issue-<旧编号>.json` 及存在的 `content/episodes/issue-<旧编号>/` 分片目录，将删除提交到同一个 PR 分支。核对新增与删除的是同一单集，再运行检查并合并。
 
 同一单集保留原 `id`，直接同时收录新旧记录会触发重复 ID 校验失败。旧稿还未收录时，关闭旧 PR 即可。机器人不会因为评论或 Issue 正文变化而自动替换已固定内容。
 
@@ -53,7 +53,7 @@ python3 -m http.server 8000 --directory output/site
 **PR 已合并或文稿已上线：** 以原分享 Issue `#17` 为例，维护者在 GitHub 网页执行：
 
 1. 打开仓库 `main` 下的 `content/episodes/issue-17.json`。这里使用原分享 Issue 编号，不是 PR 编号。
-2. 点击文件右上角菜单中的 **Delete file**。
+2. 点击文件右上角菜单中的 **Delete file**。若存在同编号目录 `content/episodes/issue-17/`，同一 PR 中也删除该目录的全部分片。
 3. 提交说明填写撤稿原因，选择新建分支并创建 PR；确认差异只删除目标文稿记录。删除文件的网页操作见 [GitHub 说明](https://docs.github.com/en/repositories/working-with-files/managing-files/deleting-files-in-a-repository)。
 4. 等待 `Community validation` 通过，合并到 `main`。内容目录变更会自动触发 `Deploy community reader`。
 5. 等待 **build** 和 **deploy** 均成功，刷新站点，核对目录与搜索不再出现该文章，原阅读链接不能再打开正文，原站内下载链接不可再下载该稿。检查成功后回复原 Issue 说明已下线。
@@ -77,8 +77,12 @@ python3 -m http.server 8000 --directory output/site
 
 ## 工作流边界
 
-- `Community submission` 仅从 `main` 运行维护中的脚本。附件按 JSON 校验，下载请求不携带仓库 token，只接受 GitHub 附件及指定存储地址；自动创建的提交只新增该 Issue 对应的内容文件。
+- `Community submission` 仅从 `main` 运行维护中的脚本。附件按 JSON 校验，下载请求不携带仓库 token，只接受 GitHub 附件、公开 Release JSON 资产及指定重定向存储地址；自动创建的提交只新增该 Issue 对应的内容文件与分片。每个 Git blob 不超过 4 MiB，写请求节流并按有限的 `Retry-After` 重试。
 - `Community validation` 在 PR 中只读运行校验、构建和测试，不部署。
 - `Deploy community reader` 只部署 `main` 中已合并的数据。无需数据库、常驻服务或浏览器端 GitHub token。
+
+超过 1 MiB 正文的大稿按约 256 KiB / 最多 200 段分页，不在首页、全文搜索索引或下载文件中重复存放全文；搜索界面明确此类稿件仅搜索元数据，完整 Markdown 在用户点击下载时逐页生成。构建先在临时目录生成并检查总量，超过 GitHub Pages 整站 1 GB 上限时失败且保留原输出。这是整站的平台限额，独立于 512 MiB 单稿接收上限；接近总量时需要减少内容库或迁移托管，不能仅提高单稿常量。
+
+平台依据：[Issue 附件 25 MB](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files)、[Git 单文件 100 MiB](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github)、[Release 资产小于 2 GiB](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)、[Pages 整站 1 GB](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)。
 
 配置依据：[Issue 表单](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-githubs-form-schema)、[Pages 自定义工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)、[GitHub token 与工作流触发](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。

@@ -138,10 +138,11 @@ def test_unsafe_or_invalid_source_links_are_rejected(submission, url):
         validate_submission(submission)
 
 
-def test_bounded_loading_rejects_oversize_duplicate_and_invalid_encoding(submission, tmp_path):
+def test_bounded_loading_rejects_oversize_duplicate_and_invalid_encoding(submission, tmp_path, monkeypatch):
+    monkeypatch.setattr("podcast_scribe.share.MAX_SUBMISSION_BYTES", 4096)
     path = tmp_path / "public.json"
-    path.write_bytes(b" " * (MAX_SUBMISSION_BYTES + 1))
-    with pytest.raises(ContentError, match="2 MiB"):
+    path.write_bytes(b" " * 4097)
+    with pytest.raises(ContentError, match="512 MiB"):
         load_submission(path)
     with pytest.raises(ContentError, match="重复字段"):
         loads_submission(b'{"schema_version":1,"schema_version":1}')
@@ -153,7 +154,7 @@ def test_bounded_loading_rejects_oversize_duplicate_and_invalid_encoding(submiss
     assert load_submission(path) == submission
 
 
-def test_count_and_total_size_limits(submission):
+def test_count_and_total_size_limits(submission, monkeypatch):
     submission["episode"]["references"] = [{"title": "ref", "url": "https://example.org"}] * 201
     with pytest.raises(ContentError, match="references"):
         validate_submission(submission)
@@ -161,7 +162,11 @@ def test_count_and_total_size_limits(submission):
     first = submission["episode"]["segments"][0]
     submission["episode"]["segments"] = [dict(first, id=f"s{i}", text="x" * 50000) for i in range(45)]
     submission["episode"]["chapters"][0]["segment_id"] = "s0"
-    with pytest.raises(ContentError, match="2 MiB"):
+    # Existing >2 MiB works under the new real production limit.
+    validate_submission(submission)
+    assert MAX_SUBMISSION_BYTES == 512 * 1024 * 1024
+    monkeypatch.setattr("podcast_scribe.share.MAX_SUBMISSION_BYTES", 2 * 1024 * 1024)
+    with pytest.raises(ContentError, match="512 MiB"):
         validate_submission(submission)
 
 

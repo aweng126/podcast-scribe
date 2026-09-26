@@ -148,6 +148,9 @@ def test_manifest_cannot_delete_external_files_and_generated_symlinks_are_reject
     keep = tmp_path / "keep.md"
     keep.write_text("keep")
     (output / ".public-site-manifest.json").write_text(json.dumps({"files": ["../keep.md", "downloads/../../keep.md"]}))
+    with pytest.raises(ValueError, match="manifest"):
+        build_public_site([], output)
+    (output / ".public-site-manifest.json").write_text(json.dumps({"files": []}))
     build_public_site([], output)
     assert keep.read_text() == "keep"
     (output / "episodes").symlink_to(tmp_path, target_is_directory=True)
@@ -182,17 +185,28 @@ def test_record_json_and_content_filenames_are_strict(tmp_path):
 NODE_HARNESS = r'''
 const fs = require("fs"), vm = require("vm");
 const spec = JSON.parse(fs.readFileSync(0, "utf8"));
-const elements = new Map(), handlers = {}, calls = [], pending = [];
+const elements = new Map(), handlers = {}, calls = [], pending = [], downloads = [];
 function element(id) {
   if (!elements.has(id)) elements.set(id, {
-    innerHTML:"", textContent:"", value:"", listeners:{}, focus(){},
+    innerHTML:"", textContent:"", value:"", listeners:{}, focus(){}, scrollIntoView(){},
     addEventListener(event, callback){ this.listeners[event] = callback; },
-    querySelectorAll(){return[];}, querySelector:element
+    querySelectorAll(selector){
+      if (selector !== "[data-page]") return [];
+      return [...this.innerHTML.matchAll(/<button[^>]*data-page="(-?[0-9]+)"([^>]*)>/g)].map(match => {
+        const segment = /data-segment="([^"]+)"/.exec(match[2]);
+        const button = element(segment ? `[data-segment="${segment[1]}"]` : `[data-page="${match[1]}"]`);
+        button.dataset = {page: match[1], segment: segment?.[1]};
+        return button;
+      });
+    }, querySelector:element
   });
   return elements.get(id);
 }
 element("transcript-data").textContent = JSON.stringify(spec.data);
-global.document = {getElementById:element, querySelector:element, title:""};
+global.document = {getElementById:element, querySelector:element, title:"", createElement(){return {click(){}};}};
+global.URL.createObjectURL = blob => { blob.text().then(text => downloads.push(text)); return "blob:download"; };
+global.URL.revokeObjectURL = () => {};
+global.setTimeout = callback => callback();
 global.location = {hash:spec.hash || "#/"};
 global.history = {replaceState(_a,_b,hash){location.hash=hash;}};
 global.window = {scrollTo(){},addEventListener(name, fn){handlers[name]=fn;}};
@@ -203,13 +217,13 @@ global.fetch = (url, options) => {
 vm.runInThisContext(fs.readFileSync(process.argv[1], "utf8"));
 const snapshots = [];
 async function flush() { await new Promise(resolve => setImmediate(resolve)); }
-function snapshot() { snapshots.push({html:element("content").innerHTML,results:element("search-results").innerHTML,calls:calls.map(item=>item.url), title:document.title}); }
+function snapshot() { snapshots.push({html:element("content").innerHTML,results:element("search-results").innerHTML,calls:calls.map(item=>item.url), title:document.title, downloads:[...downloads]}); }
 (async()=>{
   await flush(); snapshot();
   for (const action of spec.actions || []) {
     if (action.type === "route") { location.hash=action.hash; handlers.hashchange(); }
     if (action.type === "input") { const input=element("search-input"); input.value=action.value; input.listeners.input(); }
-    if (action.type === "click") element(action.selector).listeners.click({preventDefault(){}});
+    if (action.type === "click") element(action.selector).listeners.click({preventDefault(){}, currentTarget: element(action.selector)});
     if (action.type === "resolve" || action.type === "reject") {
       const index=pending.findIndex(item=>item.url===action.url);
       if(index<0) throw Error("No request: "+action.url);
@@ -306,3 +320,126 @@ def test_public_reader_escapes_body_attribution_and_title(tmp_path):
     snapshots = client(result, [{"type": "resolve", "url": url}], hash="#/episode/episode-one")
     assert "<img" not in snapshots[-1]["html"] and "<svg" not in snapshots[-1]["html"]
     assert "&lt;img" in snapshots[-1]["html"]
+
+
+def paged_record(monkeypatch):
+    monkeypatch.setattr("podcast_scribe.public_site.PAGED_TEXT_BYTES", 1)
+    monkeypatch.setattr("podcast_scribe.public_site.PAGE_TEXT_BYTES", 25)
+    source = record(content="第一页正文")
+    episode = source["submission"]["episode"]
+    episode["segments"] = [dict(episode["segments"][0], id=f"s{i}", start=i*10, end=(i+1)*10, text=f"第{i}页独有正文") for i in range(3)]
+    episode["duration_seconds"] = 30
+    episode["chapters"] = [{"id": "c1", "title": "开场", "start": 0, "segment_id": "s0"},
+                           {"id": "c2", "title": "结尾", "start": 20, "segment_id": "s2"}]
+    source["provenance"]["payload_sha256"] = submission_digest(source["submission"])
+    return source
+
+
+def test_large_body_is_stored_once_and_pages_removed_on_withdrawal(tmp_path, monkeypatch):
+    source = paged_record(monkeypatch)
+    result = build_public_site([source], tmp_path)
+    url = metadata(result)["episodes"][0]["data_url"]
+    manifest = json.loads((tmp_path / url).read_text())
+    assert manifest["paginated"] is True and manifest["segments"] == manifest["turns"] == []
+    assert manifest["chapters"][1]["page"] == 2
+    assert manifest["downloads"] == {}
+    assert "第0页" not in (tmp_path / "search-index.json").read_text()
+    pages = [(tmp_path / page["url"]) for page in manifest["pages"]]
+    segments = [segment for path in pages for segment in json.loads(path.read_text())["segments"]]
+    assert segments == source["submission"]["episode"]["segments"]
+    assert not (tmp_path / "downloads").exists()
+    build_public_site([], tmp_path)
+    assert all(not path.exists() for path in pages)
+
+
+def test_large_reader_fetches_one_page_and_chapters_cross_pages(tmp_path, monkeypatch):
+    result = build_public_site([paged_record(monkeypatch)], tmp_path)
+    url = metadata(result)["episodes"][0]["data_url"]
+    pages = json.loads((tmp_path / url).read_text())["pages"]
+    snapshots = client(result, [
+        {"type": "resolve", "url": url},
+        {"type": "resolve", "url": pages[0]["url"]},
+        {"type": "click", "selector": '[data-segment="s2"]'},
+        {"type": "resolve", "url": pages[2]["url"]},
+        {"type": "click", "selector": '[data-page="1"]'},
+        {"type": "route", "hash": "#/"},
+        {"type": "resolve", "url": pages[1]["url"]},
+    ], hash="#/episode/episode-one")
+    assert snapshots[1]["calls"] == [url, pages[0]["url"]]
+    assert "第0页独有正文" in snapshots[2]["html"] and "第1页独有正文" not in snapshots[2]["html"]
+    assert "第2页独有正文" in snapshots[4]["html"] and "第0页独有正文" not in snapshots[4]["html"]
+    assert snapshots[-1]["html"] == snapshots[-2]["html"]
+    search = client(result, hash="#/search")
+    assert "大稿仅搜索标题" in search[0]["html"]
+
+
+def test_large_reader_download_fetches_remaining_body_only_after_click(tmp_path, monkeypatch):
+    result = build_public_site([paged_record(monkeypatch)], tmp_path)
+    url = metadata(result)["episodes"][0]["data_url"]
+    pages = json.loads((tmp_path / url).read_text())["pages"]
+    snapshots = client(result, [
+        {"type": "resolve", "url": url},
+        {"type": "resolve", "url": pages[0]["url"]},
+        {"type": "click", "selector": "[data-download-full]"},
+        {"type": "resolve", "url": pages[0]["url"]},
+        {"type": "resolve", "url": pages[1]["url"]},
+        {"type": "resolve", "url": pages[2]["url"]},
+    ], hash="#/episode/episode-one")
+    assert snapshots[2]["calls"] == [url, pages[0]["url"]]
+    assert snapshots[-1]["calls"] == [url, pages[0]["url"], *(page["url"] for page in pages)]
+    assert len(snapshots[-1]["downloads"]) == 1
+    markdown = snapshots[-1]["downloads"][0]
+    assert all(f"第{index}页独有正文" in markdown for index in range(3))
+    assert "投稿署名：测试投稿人" in markdown
+
+
+def test_site_total_limit_fails_before_touching_previous_output(tmp_path, monkeypatch):
+    build_public_site([record()], tmp_path)
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    monkeypatch.setattr("podcast_scribe.public_site.MAX_SITE_BYTES", 500)
+    with pytest.raises(ValueError, match="1 GB"):
+        build_public_site([record("other", 2)], tmp_path)
+    assert before == {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+
+def test_paged_reading_and_download_preserve_turns_anchors_and_metadata(tmp_path, monkeypatch):
+    source = paged_record(monkeypatch)
+    monkeypatch.setattr("podcast_scribe.public_site.PAGE_TEXT_BYTES", 12)
+    episode = source["submission"]["episode"]
+    episode["segments"] = [dict(episode["segments"][0], id=f"s{i}", start=i*10, end=(i+1)*10, text=value)
+                           for i, value in enumerate(["Hello,", "world.", "今天", "很好"])]
+    episode["duration_seconds"] = 40
+    episode["chapters"] = [{"id": "c1", "title": "开场", "start": 0, "segment_id": "s0"},
+                           {"id": "c2", "title": "句中章节", "start": 10, "segment_id": "s1"},
+                           {"id": "c3", "title": "结尾", "start": 30, "segment_id": "s3"}]
+    episode["references"] = [{"title": "人物核验", "url": "https://example.com/person"}]
+    source["provenance"]["payload_sha256"] = submission_digest(source["submission"])
+    result = build_public_site([source], tmp_path)
+    url = metadata(result)["episodes"][0]["data_url"]
+    pages = json.loads((tmp_path / url).read_text())["pages"]
+    snapshots = client(result, [
+        {"type": "resolve", "url": url},
+        {"type": "resolve", "url": pages[0]["url"]},
+        {"type": "click", "selector": "[data-download-full]"},
+        *({"type": "resolve", "url": page["url"]} for page in pages),
+    ], hash="#/episode/episode-one")
+    html = snapshots[2]["html"]
+    assert html.count('class="dialogue"') == 1
+    assert '>Hello,</span>' in html and '> world.</span>' in html
+    assert '<h3 class="transcript-chapter">句中章节' not in html
+    markdown = snapshots[-1]["downloads"][0]
+    assert markdown.count("**[") == 1  # Same speaker remains one turn across pages.
+    assert 'Hello,<a id="segment-2"></a> world.<a id="segment-3"></a>今天<a id="segment-4"></a>很好' in markdown
+    assert "### 句中章节" not in markdown
+    for expected in ("#segment-2", "人物核验", "https://example.com/person", "访谈节目", "投稿账号：someone"):
+        assert expected in markdown
+
+
+@pytest.mark.parametrize('broken', ['{', '[]', '{}', '{"files":false}', '{"files":[5]}', '{"files":["../private"]}'])
+def test_corrupt_existing_manifest_fails_without_orphaning_withdrawn_pages(tmp_path, monkeypatch, broken):
+    build_public_site([paged_record(monkeypatch)], tmp_path)
+    (tmp_path / '.public-site-manifest.json').write_text(broken)
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+    with pytest.raises(ValueError, match='manifest'):
+        build_public_site([], tmp_path)
+    assert before == {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}

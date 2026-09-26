@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "podcast-scribe"
-version = "0.2.0"
+version = "0.3.0"
 description = "Speaker-aware podcast transcripts, document exports and a static reading site"
 requires-python = ">=3.10"
 dependencies = ["yt-dlp>=2026.8.19", "reportlab>=4.4", "imageio-ffmpeg>=0.6", "openai>=2.15"]

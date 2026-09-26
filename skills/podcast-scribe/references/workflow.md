@@ -109,11 +109,11 @@ B站单集：
 
 新导入不会覆盖已存在的单集；已有稿件使用 `edit`，重新转写则指定新路径。默认音频缓存位于任务工作区的 `data/cache/`，可用 `--cache` 明确指定。
 
-`ingest/transcribe` 会将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。整段音频压缩为单声道 16 kHz、32 kbps MP3，上传前限制 24 MB；超限明确停止，要求导入已有整集说话人转写。第一版不实现独立音频分块之间的说话人匹配。相同内容与配置命中的成功转写缓存不会重复付费请求；失败响应不算成功缓存。
+`ingest/transcribe` 会将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。音频转换为单声道 16 kHz、32 kbps MP3；长音频自动分片，每片单独检查上传大小，成功结果缓存到本地。中断后重跑相同命令与缓存目录可复用成功分片。跨片人物通过匿名参考声源辅助对应，无法确认的标签需继续校对；具体边界、缓存规则与限制见 [长音视频](long-audio.md)。
 
 B站普通网页提取失败时，程序尝试正常公开元数据与播放 API，核验所选分 P、权限/预览标记和时长；音频主地址失败后最多使用该音轨响应提供的两个备用地址。平台仍可能限制公开 API，因此不能保证每次都可获取。已下载音频和成功转写应复用。
 
-`import` 只解析已有文件，不需要 API，不会猜人物姓名。CLI 生成原始草稿后，由 Skill 所在 Agent 阅读完整 JSON，按 [数据约定](schema.md) 生成 edits JSON。
+`import` 只解析已有文件，不需要 API，不会猜人物姓名。CLI 生成原始草稿后，由 Skill 所在 Agent 按 [分批整理](editing.md) 读取必要文本，按 [数据约定](schema.md) 生成增量 edits JSON；不需要把完整 JSON、原始响应和历史反复放入模型上下文。
 
 ## 校对、导出与阅读站
 

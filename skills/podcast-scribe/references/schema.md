@@ -16,7 +16,7 @@
 - `artifacts: {markdown, pdf}`：生成路径。编辑后清空，防止页面下载过期版本。
 - 可选 `is_demo: true`：仅用于明确演示，不能发布。
 
-整理时写 edits JSON，不直接覆盖原记录：
+长文先通过 `status` 和 `batch` 读取所需范围，具体预算、续读及 `edit --batch` 的过期保护见 [分批整理](editing.md)。整理时写只含变化字段的 edits JSON，不直接覆盖原记录：
 
 ```json
 {

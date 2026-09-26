@@ -153,6 +153,7 @@ def test_cloud_adapter_requests_speaker_segments_and_reuses_success_cache(tmp_pa
         def __exit__(self, *args): pass
     monkeypatch.setattr(openai, "OpenAI", Client)
     monkeypatch.setattr(module, "prepare_audio", lambda source, destination: source)
+    monkeypatch.setattr(module, "analyze_audio", lambda source: {"duration": 1.0, "silences": []})
     first = module.transcribe_audio(source, tmp_path / "cache")
     second = module.transcribe_audio(source, tmp_path / "cache")
     assert first == second and len(calls) == 1

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -20,7 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "podcast
 
 from podcast_scribe.model import ContentError
 from podcast_scribe.share import MAX_SUBMISSION_BYTES, loads_submission, submission_digest
-from podcast_scribe.public_site import loads_record, validate_record
+from podcast_scribe.public_site import validate_record
+from podcast_scribe.public_storage import (PART_BYTES, load_stored_record,
+                                          record_bytes, storage_manifest, stored_files)
 
 REPOSITORY = "aweng126/podcast-scribe"
 CONSENT = "我已检查投稿文件，确认可以公开分享，并同意在本项目及公共阅读站展示。"
@@ -57,12 +60,13 @@ def attachment_url(value: str) -> str:
     # Accept exactly one attachment link, including GitHub's normal Markdown wrapper.
     match = re.fullmatch(r"(?:\[[^\]\r\n]*\]\((https://[^\s<>]+)\)|(https://[^\s<>]+))", value.strip())
     if not match:
-        raise IntakeError("请上传一个 JSON 附件，不要粘贴正文或外部下载链接")
+        raise IntakeError("请提供一个 JSON 附件或公开 GitHub Release JSON 资产链接")
     url = match.group(1) or match.group(2)
     parts = urlsplit(url)
     if (parts.scheme != "https" or parts.netloc != "github.com" or parts.query or parts.fragment
-            or not re.fullmatch(r"/user-attachments/files/[1-9][0-9]*/[A-Za-z0-9_.-]+\.json", parts.path)):
-        raise IntakeError("只接受 github.com/user-attachments/files/ 下的 JSON 附件")
+            or not re.fullmatch(r"(?:/user-attachments/files/[1-9][0-9]*|/[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+/releases/download/[A-Za-z0-9_.-]+)/[A-Za-z0-9_.-]+\.json", parts.path)
+            or any(part in {".", ".."} for part in parts.path.split("/"))):
+        raise IntakeError("只接受 GitHub JSON 附件或公开 Release 资产的直接下载链接")
     return url
 
 
@@ -71,7 +75,13 @@ def allowed_download(url: str) -> bool:
     if parts.scheme != "https" or parts.username or parts.password or parts.port not in (None, 443):
         return False
     if parts.hostname == "github.com":
-        return parts.path.startswith("/user-attachments/files/")
+        try:
+            attachment_url(url)
+            return True
+        except IntakeError:
+            return False
+    if parts.hostname == "release-assets.githubusercontent.com":
+        return parts.path.startswith("/github-production-release-asset/")
     if parts.hostname == "objects.githubusercontent.com":
         return parts.path.startswith(("/github-production-repository-file-", "/github-production-user-asset-"))
     return parts.hostname in {
@@ -99,13 +109,13 @@ def download_submission(url: str) -> dict:
     url = attachment_url(url)
     request = Request(url, headers={"Accept": "application/json, application/octet-stream", "User-Agent": "podcast-scribe-intake"})
     # This client deliberately has no Authorization header, even for GitHub redirects.
-    with build_opener(AttachmentRedirects()).open(request, timeout=20) as response:
+    with build_opener(AttachmentRedirects()).open(request, timeout=60) as response:
         length = response.headers.get("Content-Length")
         if length and (not length.isdigit() or int(length) > MAX_SUBMISSION_BYTES):
-            raise IntakeError("投稿文件超过 2 MiB 或长度无效")
+            raise IntakeError("投稿文件超过 512 MiB 或长度无效")
         payload = response.read(MAX_SUBMISSION_BYTES + 1)
     if len(payload) > MAX_SUBMISSION_BYTES:
-        raise IntakeError("投稿文件超过 2 MiB")
+        raise IntakeError("投稿文件超过 512 MiB")
     return loads_submission(payload)
 
 
@@ -150,6 +160,7 @@ class GitHub:
         self.token = token
         self.repository = repository
         self.opener = build_opener(NoRedirects())
+        self.last_write = 0.0
 
     def call(self, method: str, path: str, data=None, *, missing_ok=False):
         if not path.startswith("/") or path.startswith("//"):
@@ -159,29 +170,34 @@ class GitHub:
                           headers={"Authorization": "Bearer " + self.token, "Accept": "application/vnd.github+json",
                                    "Content-Type": "application/json", "X-GitHub-Api-Version": "2022-11-28",
                                    "User-Agent": "podcast-scribe-intake"})
-        try:
-            with self.opener.open(request, timeout=20) as response:
-                body = response.read(8 * 1024 * 1024 + 1)
-                if len(body) > 8 * 1024 * 1024:
-                    raise IntakeError("GitHub API 响应过大")
-                return json.loads(body) if body else None
-        except HTTPError as error:
-            if missing_ok and error.code == 404:
-                return None
-            if error.code == 403 and method == "POST" and path == "/pulls":
-                raise IntakeError("创建 PR 被拒绝。请在 Settings → Actions → General → Workflow permissions 启用 Allow GitHub Actions to create and approve pull requests，然后重跑本工作流。") from None
-            raise IntakeError(f"GitHub API {method} 请求失败（HTTP {error.code}）；请检查 Actions 权限并重跑工作流") from None
-
-
-def record_bytes(record: dict) -> bytes:
-    return (json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode()
+        for attempt in range(4):
+            try:
+                # Stay below GitHub's 80 content-generating requests per minute.
+                if method != "GET":
+                    time.sleep(max(0, 1.1 - (time.monotonic() - self.last_write)))
+                    self.last_write = time.monotonic()
+                with self.opener.open(request, timeout=60) as response:
+                    body = response.read(8 * 1024 * 1024 + 1)
+                    if len(body) > 8 * 1024 * 1024:
+                        raise IntakeError("GitHub API 响应过大")
+                    return json.loads(body) if body else None
+            except HTTPError as error:
+                if missing_ok and error.code == 404:
+                    return None
+                retry = error.headers.get("Retry-After", "") if error.headers else ""
+                if error.code in {403, 429} and retry.isdigit() and int(retry) <= 120 and attempt < 3:
+                    time.sleep(max(1, int(retry)))
+                    continue
+                if error.code == 403 and method == "POST" and path == "/pulls":
+                    raise IntakeError("创建 PR 被拒绝。请在 Settings → Actions → General → Workflow permissions 启用 Allow GitHub Actions to create and approve pull requests，然后重跑本工作流。") from None
+                raise IntakeError(f"GitHub API {method} 请求失败（HTTP {error.code}）；请检查 Actions 权限并重跑工作流") from None
 
 
 def pull_body(record: dict) -> str:
     provenance = record["provenance"]
     return (f"{PR_MARKER}\n\n收录来自 {provenance['issue_url']} 的固定投稿。\n\n"
             f"内容 SHA-256：`{provenance['payload_sha256']}`\n\n"
-            "请核对来源、正文、署名与公开分享确认。此 PR 只新增一份公开 JSON；Issue 后续编辑不会改变此快照。"
+            "请核对来源、正文、署名与公开分享确认。此 PR 只新增公开投稿数据（大稿包含校验清单与分片）；Issue 后续编辑不会改变此快照。"
             "如机器人创建的 PR 检查显示等待批准，请先批准运行检查，再人工合并。合并后 Pages 自动更新。\n\n"
             f"合并且 Pages 部署成功后可阅读：{reader_url(record)}\n\n"
             f"Closes {provenance['issue_url']}\n")
@@ -189,6 +205,20 @@ def pull_body(record: dict) -> str:
 
 def reader_url(record: dict) -> str:
     return "https://aweng126.github.io/podcast-scribe/#/episode/" + quote(record["submission"]["episode"]["id"], safe="")
+
+
+def stored_blob(api, path: str, branch: str, maximum: int) -> bytes:
+    stored = api.call("GET", f"/contents/{path}?ref=" + quote(branch, safe=""))
+    if stored.get("type") != "file" or stored.get("size", 0) > maximum:
+        raise IntakeError("已有投稿文件格式或大小无效")
+    if stored.get("encoding") == "none" and re.fullmatch(r"[a-f0-9]{40}", stored.get("sha", "")):
+        stored = api.call("GET", "/git/blobs/" + stored["sha"])
+    if stored.get("encoding") != "base64" or stored.get("size", 0) > maximum:
+        raise IntakeError("已有投稿文件编码或大小无效")
+    payload = base64.b64decode(stored["content"], validate=False)
+    if len(payload) > maximum:
+        raise IntakeError("已有投稿文件过大")
+    return payload
 
 
 def freeze_submission(api, event: dict, repository: str, download=download_submission) -> str:
@@ -213,20 +243,18 @@ def freeze_submission(api, event: dict, repository: str, download=download_submi
         # Retry after branch/commit creation succeeded but PR creation failed. Never modify the branch.
         compare = api.call("GET", f"/compare/main...{branch}")
         files = compare.get("files", [])
-        if len(files) != 1 or files[0].get("filename") != path or files[0].get("status") != "added":
-            raise IntakeError("已有投稿分支并非单文件新增，拒绝覆盖；请维护者检查")
-        stored = api.call("GET", f"/contents/{path}?ref=" + quote(branch, safe=""))
-        if stored.get("type") != "file" or stored.get("size", 0) > MAX_SUBMISSION_BYTES + 4096:
-            raise IntakeError("已有投稿文件格式无效")
-        if stored.get("encoding") == "none" and re.fullmatch(r"[a-f0-9]{40}", stored.get("sha", "")):
-            # Contents responses omit inline data for files larger than 1 MiB.
-            stored = api.call("GET", "/git/blobs/" + stored["sha"])
-        if stored.get("encoding") != "base64" or stored.get("size", 0) > MAX_SUBMISSION_BYTES + 4096:
-            raise IntakeError("已有投稿文件编码或大小无效")
-        payload = base64.b64decode(stored["content"], validate=False)
-        if len(payload) > MAX_SUBMISSION_BYTES + 4096:
-            raise IntakeError("已有投稿文件过大")
-        record = loads_record(payload)
+        if (not files or len(files) > 257 or any(item.get("status") != "added" for item in files)
+                or path not in {item.get("filename") for item in files}
+                or any(item.get("filename") != path and not re.fullmatch(
+                    f"content/episodes/issue-{number}/part-[0-9]{{5}}\\.bin", item.get("filename", "")) for item in files)):
+            raise IntakeError("已有投稿分支包含非投稿数据，拒绝覆盖；请维护者检查")
+        payload = stored_blob(api, path, branch, PART_BYTES)
+        manifest = storage_manifest(payload, number)
+        expected = {path} | ({"content/episodes/" + part["name"] for part in manifest["parts"]} if manifest else set())
+        if expected != {item["filename"] for item in files} or len(files) != len(expected):
+            raise IntakeError("已有投稿分片与清单不匹配，拒绝覆盖")
+        record = load_stored_record(payload, number,
+                                    lambda name, size: stored_blob(api, "content/episodes/" + name, branch, size))
         if record["provenance"]["issue_url"] != url or record["provenance"]["submitter"] != login:
             raise IntakeError("已有投稿快照来源不匹配，拒绝覆盖")
     else:
@@ -236,8 +264,11 @@ def freeze_submission(api, event: dict, repository: str, download=download_submi
         if api.call("GET", f"/contents/{path}?ref=" + main, missing_ok=True):
             return "该 Issue 已收录。修改文稿请新建分享 Issue，注明原投稿链接。"
         commit = api.call("GET", "/git/commits/" + main)
-        blob = api.call("POST", "/git/blobs", {"encoding": "base64", "content": base64.b64encode(record_bytes(record)).decode()})
-        tree = api.call("POST", "/git/trees", {"base_tree": commit["tree"]["sha"], "tree": [{"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]}]})
+        entries = []
+        for relative, payload in stored_files(record, number):
+            blob = api.call("POST", "/git/blobs", {"encoding": "base64", "content": base64.b64encode(payload).decode()})
+            entries.append({"path": "content/episodes/" + relative, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+        tree = api.call("POST", "/git/trees", {"base_tree": commit["tree"]["sha"], "tree": entries})
         new_commit = api.call("POST", "/git/commits", {"message": f"Add community submission from issue #{number}", "tree": tree["sha"], "parents": [main]})
         # Creating the ref last makes the operation resumable without a half-written branch.
         api.call("POST", "/git/refs", {"ref": "refs/heads/" + branch, "sha": new_commit["sha"]})

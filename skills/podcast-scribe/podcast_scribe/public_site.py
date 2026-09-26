@@ -12,6 +12,8 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
+import tempfile
 
 from .exporters import _md, render_markdown
 from .reading import reading_turns, segment_text_parts
@@ -23,7 +25,10 @@ SUBMIT_URL = REPOSITORY_URL + "/issues/new?template=share.yml"
 _ASSETS = Path(__file__).with_name("assets")
 _ISSUE = re.compile(re.escape(REPOSITORY_URL) + r"/issues/([1-9][0-9]*)\Z")
 _LOGIN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?(?:\[bot\])?\Z")
-_OWNED = re.compile(r"(?:episodes/[0-9a-f]{64}\.json|downloads/[0-9a-f]{64}\.md)\Z")
+_OWNED = re.compile(r"(?:episodes/[0-9a-f]{64}(?:-[0-9]{5})?\.json|downloads/[0-9a-f]{64}\.md)\Z")
+PAGED_TEXT_BYTES = 1024 * 1024
+PAGE_TEXT_BYTES = 256 * 1024
+MAX_SITE_BYTES = 1_000_000_000
 
 
 def validate_record(record: object) -> dict:
@@ -104,6 +109,39 @@ def _metadata(episode: dict, filename: str) -> dict:
     }
 
 
+def _paged_episode(record: dict, filename: str, emit) -> dict:
+    source = record["submission"]["episode"]
+    public = {key: value for key, value in source.items() if key != "segments"}
+    public.update(status="published", is_demo=False, attribution=record["submission"]["attribution"],
+                  provenance=record["provenance"], downloads={}, paginated=True, segments=[], turns=[],
+                  segment_count=len(source["segments"]), pages=[], chapters=deepcopy(source["chapters"]))
+    chunk, size, offset = [], 0, 0
+    page_for_segment = {}
+    def flush():
+        nonlocal chunk, size, offset
+        if not chunk:
+            return
+        number = len(public["pages"])
+        url = f"episodes/{filename}-{number:05d}.json"
+        emit(url, _json({"segments": chunk}))
+        public["pages"].append({"url": url, "start": chunk[0]["start"], "end": chunk[-1]["end"],
+                                "segment_start": offset, "segment_count": len(chunk)})
+        page_for_segment.update((segment["id"], (number, offset + index)) for index, segment in enumerate(chunk))
+        offset += len(chunk)
+        chunk, size = [], 0
+    for segment in source["segments"]:
+        text_size = len(segment["text"].encode("utf-8"))
+        if chunk and (size + text_size > PAGE_TEXT_BYTES or len(chunk) >= 200):
+            flush()
+        chunk.append(segment)
+        size += text_size
+    flush()
+    for chapter in public["chapters"]:
+        chapter["page"], chapter["segment_index"] = page_for_segment[chapter["segment_id"]]
+    public["text_bytes"] = sum(len(segment["text"].encode("utf-8")) for segment in source["segments"])
+    return public
+
+
 def _check_output_path(out_dir: Path, relative: str) -> None:
     """Reject symlinks before writes or removal, including generated parents."""
     for path in [out_dir, *out_dir.parents]:
@@ -136,23 +174,43 @@ def build_public_site(records: list[dict], out_dir: Path) -> Path:
         if len(values) != len(set(values)):
             raise ValueError(f"Public library {field} must be unique.")
     checked.sort(key=lambda item: item["submission"]["episode"]["id"])
-    files = {}
-    catalogue = []
-    search = []
+    with tempfile.TemporaryDirectory(prefix="podcast-scribe-public-") as temporary:
+        return _build_checked_site(checked, out_dir, Path(temporary))
+
+
+def _build_checked_site(checked, out_dir, staging):
+    files = []
+    total = 0
+    def emit(name, content):
+        nonlocal total
+        target = staging / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        total += target.stat().st_size
+        if total > MAX_SITE_BYTES:
+            raise ValueError("Public site exceeds the GitHub Pages 1 GB limit; reduce the library or use another host.")
+        files.append(name)
+
+    catalogue, search = [], []
+    paginated_count = 0
     for record in checked:
         identifier = record["submission"]["episode"]["id"]
         filename = hashlib.sha256(identifier.encode("utf-8")).hexdigest()
-        public = _episode(record, filename)
+        text_bytes = sum(len(segment["text"].encode("utf-8")) for segment in record["submission"]["episode"]["segments"])
+        paginated = text_bytes > PAGED_TEXT_BYTES
+        public = _paged_episode(record, filename, emit) if paginated else _episode(record, filename)
+        paginated_count += int(paginated)
         catalogue.append(_metadata(public, filename))
-        files[f"episodes/{filename}.json"] = _json(public)
-        markdown = render_markdown(submission_episode(record["submission"]))
-        markdown += (
-            "\n## 投稿信息\n\n"
-            + "- **投稿署名**：" + _md(record["submission"]["attribution"]) + "\n"
-            + "- **投稿账号**：" + _md(record["provenance"]["submitter"]) + "\n"
-            + "- **投稿记录**：[GitHub Issue](" + record["provenance"]["issue_url"] + ")\n"
-        )
-        files[f"downloads/{filename}.md"] = markdown
+        emit(f"episodes/{filename}.json", _json(public))
+        if not paginated:
+            markdown = render_markdown(submission_episode(record["submission"]))
+            markdown += (
+                "\n## 投稿信息\n\n"
+                + "- **投稿署名**：" + _md(record["submission"]["attribution"]) + "\n"
+                + "- **投稿账号**：" + _md(record["provenance"]["submitter"]) + "\n"
+                + "- **投稿记录**：[GitHub Issue](" + record["provenance"]["issue_url"] + ")\n"
+            )
+            emit(f"downloads/{filename}.md", markdown)
         search.append({"id": identifier, "text": " ".join([
             public["title"], public["description"], public["series"]["title"],
             *public["summary"], *(speaker["name"] for speaker in public["speakers"]),
@@ -160,40 +218,48 @@ def build_public_site(records: list[dict], out_dir: Path) -> Path:
         ])})
     data = {"schema_version": 1, "mode": "public", "preview": False,
             "repository_url": REPOSITORY_URL, "submit_url": SUBMIT_URL,
-            "search_url": "search-index.json", "episodes": catalogue}
+            "search_url": "search-index.json", "episodes": catalogue,
+            "paginated_episodes": paginated_count}
     serialized = _json(data).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     template = (_ASSETS / "index.html").read_text(encoding="utf-8")
-    files["index.html"] = template.replace("<!-- TRANSCRIPT_DATA -->", serialized)
-    files["search-index.json"] = _json({"schema_version": 1, "episodes": search})
+    emit("index.html", template.replace("<!-- TRANSCRIPT_DATA -->", serialized))
+    emit("search-index.json", _json({"schema_version": 1, "episodes": search}))
     for name in ("app.js", "app.css"):
-        files[name] = (_ASSETS / name).read_text(encoding="utf-8")
-    files[".nojekyll"] = ""
-    # Resolve parent aliases such as macOS /tmp without following a symlink at
-    # the user-selected output directory itself.
+        emit(name, (_ASSETS / name).read_text(encoding="utf-8"))
+    emit(".nojekyll", "")
     out_dir = Path(out_dir).absolute()
     if out_dir.is_symlink():
         raise ValueError("Output directory must not be a symlink.")
     out_dir = out_dir.parent.resolve() / out_dir.name
     manifest = ".public-site-manifest.json"
     _check_output_path(out_dir, manifest)
-    try:
-        previous = json.loads((out_dir / manifest).read_text(encoding="utf-8")).get("files", [])
-    except (OSError, ValueError, AttributeError):
-        previous = []
+    previous = []
+    if (out_dir / manifest).exists():
+        try:
+            previous_manifest = json.loads((out_dir / manifest).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ValueError("Existing public site manifest is invalid; refusing to lose withdrawal tracking.") from error
+        if (not isinstance(previous_manifest, dict) or set(previous_manifest) != {"files"}
+                or not isinstance(previous_manifest["files"], list)
+                or any(not isinstance(name, str) or not _OWNED.fullmatch(name) for name in previous_manifest["files"])
+                or len(previous_manifest["files"]) != len(set(previous_manifest["files"]))):
+            raise ValueError("Existing public site manifest is invalid; refusing to lose withdrawal tracking.")
+        previous = previous_manifest["files"]
     owned = sorted(name for name in files if _OWNED.fullmatch(name))
-    stale = [name for name in previous if isinstance(name, str) and _OWNED.fullmatch(name) and name not in owned] if isinstance(previous, list) else []
-    files[manifest] = _json({"files": owned})
+    stale = [name for name in previous if name not in owned]
+    emit(manifest, _json({"files": owned}))
     for name in [*files, *stale]:
         _check_output_path(out_dir, name)
-    # Render and validate every document before changing the previous output.
+    # All generation, size and path checks finish before modifying old output.
+    # Only the current page is materialized at once, even for a 512 MiB input.
     out_dir.mkdir(parents=True, exist_ok=True)
-    for name, content in files.items():
+    for name in files:
         if name == manifest:
             continue
         target = out_dir / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        shutil.copyfile(staging / name, target)
     for name in stale:
         (out_dir / name).unlink(missing_ok=True)
-    (out_dir / manifest).write_text(files[manifest], encoding="utf-8")
+    shutil.copyfile(staging / manifest, out_dir / manifest)
     return out_dir / "index.html"
