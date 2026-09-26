@@ -5,8 +5,8 @@ import pytest
 from yt_dlp.extractor.bilibili import BiliBiliIE
 from yt_dlp.utils import DownloadError
 
-from video_to_markdown.model import ContentError
-from video_to_markdown import sources
+from podcast_scribe.model import ContentError
+from podcast_scribe import sources
 
 
 URL = "https://www.bilibili.com/video/BV1GZbT6UE7o"
@@ -232,7 +232,7 @@ def test_real_ytdlp_format_processing_preserves_same_stream_backup(tmp_path, mon
     info = {"id": "example", "title": "format contract", "duration": 145,
             "extractor": "BiliBili", "extractor_key": "BiliBili", "formats": [
                 {"format_id": "audio", "url": PRIMARY, "ext": "m4a", "vcodec": "none",
-                 "acodec": "mp4a.40.2", "tbr": 128, "_vtm_backup_urls": [BACKUP]},
+                 "acodec": "mp4a.40.2", "tbr": 128, "_podcast_scribe_backup_urls": [BACKUP]},
             ]}
     with sources._ydl({"format": "bestaudio", "outtmpl": str(tmp_path / "source.%(ext)s")}) as ydl:
         def transfer(selected):

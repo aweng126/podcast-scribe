@@ -6,10 +6,10 @@ import wave
 
 import pytest
 
-from video_to_markdown.cli import main
-from video_to_markdown.model import ContentError, apply_edits, load_episode, new_episode, validate_episode
-from video_to_markdown.sources import normalize_url
-from video_to_markdown.transcripts import normalize_segments, read_transcript
+from podcast_scribe.cli import main
+from podcast_scribe.model import ContentError, apply_edits, load_episode, new_episode, validate_episode
+from podcast_scribe.sources import normalize_url
+from podcast_scribe.transcripts import normalize_segments, read_transcript
 
 
 def episode():
@@ -102,7 +102,7 @@ def test_single_video_input_only():
 
 def test_cloud_adapter_requests_speaker_segments_and_reuses_success_cache(tmp_path, monkeypatch):
     import openai
-    import video_to_markdown.transcribe as module
+    import podcast_scribe.transcribe as module
     source = tmp_path / "test.mp3"
     source.write_bytes(b"mock audio bytes, not a recording")
     monkeypatch.setenv("OPENAI_API_KEY", "test-not-a-real-key")
@@ -126,7 +126,7 @@ def test_cloud_adapter_requests_speaker_segments_and_reuses_success_cache(tmp_pa
 
 
 def test_ffmpeg_can_prepare_local_audio(tmp_path):
-    from video_to_markdown.transcribe import prepare_audio
+    from podcast_scribe.transcribe import prepare_audio
     source = tmp_path / "silence.wav"
     with wave.open(str(source), "wb") as stream:
         stream.setnchannels(1)

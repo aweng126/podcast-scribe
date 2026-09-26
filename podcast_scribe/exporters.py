@@ -1,7 +1,7 @@
 """Render a shared episode record to readable Markdown and Chinese PDF.
 
 PDF support is optional. Install ``reportlab`` and provide an embeddable Chinese
-TrueType font via ``VIDEO_TO_MARKDOWN_FONT`` if none is installed system-wide.
+TrueType font via ``PODCAST_SCRIBE_FONT`` if none is installed system-wide.
 """
 
 from __future__ import annotations
@@ -223,7 +223,7 @@ def _pdf_font() -> str:
         from reportlab.pdfbase.ttfonts import TTFont
     except ImportError as exc:
         raise RuntimeError("PDF 导出需要 reportlab，请安装项目的 PDF 依赖。") from exc
-    explicit = os.environ.get("VIDEO_TO_MARKDOWN_FONT")
+    explicit = os.environ.get("PODCAST_SCRIBE_FONT")
     candidates = [explicit] if explicit else [
         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
         "/Library/Fonts/Arial Unicode.ttf",
@@ -253,7 +253,7 @@ def _pdf_font() -> str:
             errors.append(f"{candidate}: {exc}")
     detail = "; ".join(errors)
     raise RuntimeError(
-        "未找到可嵌入的中文 TrueType 字体。请将 VIDEO_TO_MARKDOWN_FONT 设为中文 .ttf 或 TrueType .ttc 文件路径。"
+        "未找到可嵌入的中文 TrueType 字体。请将 PODCAST_SCRIBE_FONT 设为中文 .ttf 或 TrueType .ttc 文件路径。"
         + (f" ({detail})" if detail else "")
     )
 
@@ -422,7 +422,7 @@ def _render_pdf(episode: dict, path: Path, font: str) -> None:
         canvas.line(48, 43, width - 48, 43)
         canvas.setFont(font, 8)
         canvas.setFillColor(muted)
-        canvas.drawString(48, 29, "播客文稿" + (" · 草稿" if draft else ""))
+        canvas.drawString(48, 29, "听稿" + (" · 草稿" if draft else ""))
         canvas.drawRightString(width - 48, 29, f"第 {doc.page} 页")
         canvas.restoreState()
 

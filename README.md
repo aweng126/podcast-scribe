@@ -1,6 +1,8 @@
-# Video to Markdown
+# 听稿 · Podcast Scribe
 
-将 B站单集或本地音视频整理为带说话人、时间戳、摘要与章节的完整文稿；从同一份 JSON 导出 Markdown、中文 PDF 和静态播客系列阅读站。
+将播客与访谈整理成可阅读、可检索、可导出的完整文稿。
+
+支持 B站单集或本地音视频，保留说话人、时间戳、摘要与章节；从同一份 JSON 导出 Markdown、中文 PDF 和静态播客系列阅读站。仓库与 Skill 名称为 `podcast-scribe`，Python 包为 `podcast_scribe`。
 
 ## 当前版本
 
@@ -17,6 +19,7 @@
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[test]'
+.venv/bin/podcast-scribe --help
 .venv/bin/python scripts/demo.py
 ```
 
@@ -30,7 +33,7 @@ python3 -m venv .venv
 
 依据《小天章》官方播客主页与 EP5 单集说明核实：采访者为章泽天，受访者为何超琼。本稿只覆盖用户提供的约 2 分 25 秒剪辑片段。少量词句与交叠发言标为待核，保持草稿状态。
 
-- 真实节目预览：`output/preview/index.html`（刷新此前打开的 Safari 页面）。
+- 真实节目预览：`output/preview/index.html`（项目更名后，从新目录重新打开）。
 - 可编辑数据与原始音轨：`data/BV1GZbT6UE7o/`。
 - 真实 Markdown/PDF：`output/exports/BV1GZbT6UE7o.md` 与 `.pdf`。
 - 成功获取诊断：`output/diagnostics/public-playback-check.json`；先前受限诊断继续保留，作为历史记录。
@@ -45,10 +48,12 @@ python3 -m venv .venv
 
 ## 开发检查
 
+移动项目目录时，建议在新目录重新创建虚拟环境，再运行 `.venv/bin/python -m pip install -e '.[test]'`，以更新可编辑安装路径和命令入口。仅修改包名时，重新安装即可。当前版本尚未发布，不保留旧命令或旧包名别名。
+
 ```sh
 .venv/bin/python -m pytest -q
-.venv/bin/python scripts/vtm.py doctor
-node --check video_to_markdown/assets/app.js
+.venv/bin/podcast-scribe doctor
+node --check podcast_scribe/assets/app.js
 ```
 
-PDF 使用可嵌入中文 TrueType 字体，可用 `VIDEO_TO_MARKDOWN_FONT` 配置。API 密钥仅从运行环境读取，不应保存到仓库、文稿或站点。公开部署只使用 `output/site/`；音频缓存、原始转写、草稿预览与编辑历史保留在本地。
+PDF 使用可嵌入中文 TrueType 字体，可用 `PODCAST_SCRIBE_FONT` 配置。API 密钥仅从运行环境读取，不应保存到仓库、文稿或站点。公开部署只使用 `output/site/`；音频缓存、原始转写、草稿预览与编辑历史保留在本地。

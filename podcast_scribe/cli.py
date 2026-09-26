@@ -38,7 +38,7 @@ def _save_new(args, metadata, segments, speakers):
 
 
 def parser():
-    root = argparse.ArgumentParser(prog="vtm", description="B站视频 → 带说话人的文稿 → Markdown / PDF / 阅读站")
+    root = argparse.ArgumentParser(prog="podcast-scribe", description="听稿 / Podcast Scribe：将播客与访谈整理成可阅读、可检索、可导出的完整文稿。")
     sub = root.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="检查依赖和密钥是否配置，不显示密钥")
     p = sub.add_parser("inspect", help="只读取 B站单集元数据")

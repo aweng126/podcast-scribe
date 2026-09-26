@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import unittest
 
-from video_to_markdown.site import build_site
+from podcast_scribe.site import build_site
 
 
 def fixture(identifier="example", status="published"):

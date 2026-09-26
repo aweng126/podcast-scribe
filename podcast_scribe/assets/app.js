@@ -34,7 +34,7 @@
   </article>`;
 
   function home() {
-    document.title = "文稿集 · 播客里的好对话";
+    document.title = "听稿 · 播客里的好对话";
     main.innerHTML = `<section class="hero"><div class="hero-copy"><span class="eyebrow"><span class="accent-line"></span> GOOD CONVERSATIONS, IN WORDS</span><h1>把声音，<br>留在<span>纸上。</span></h1><p>读一场完整的对话。<br>循着章节找到观点，跟着文字重新思考。</p><a class="text-link" href="#/search">寻找你感兴趣的话题 <span aria-hidden="true">↗</span></a></div><div class="hero-art" aria-hidden="true"><div class="art-caption">THE READING ROOM <span>01 — ∞</span></div><div class="art-quote">“</div><div class="art-lines"><i></i><i></i><i></i><i></i><i></i></div><div class="art-bottom">声音有回响<br>文字有留白 <span>↙</span></div></div></section>
     <section class="library-section" aria-label="播客系列">${sectionHeading("SERIES", "从一个系列开始", series.length)}${series.length ? `<div class="series-grid">${series.map((item, index) => `<a class="series-card tone-${index % 4}" href="${route("series", item.id)}"><div class="series-cover"><span class="series-cover-label">PODCAST SERIES</span><span class="series-cover-title">${safe(item.title)}</span><span class="series-cover-foot">${String(index + 1).padStart(2, "0")} <span aria-hidden="true">↗</span></span></div><div class="series-card-info"><h3>${safe(item.title)}</h3><span>${item.episodes.length} 篇</span><p>${safe(item.description || "收录这个系列的完整对话与章节整理。")}</p></div></a>`).join("")}</div>` : empty("第一场对话，正在路上", "发布第一篇经过校对的文稿后，系列和单集会出现在这里。")}</section>
     ${episodes.length ? `<section class="library-section">${sectionHeading("LATEST READINGS", "最近收录", episodes.length)}<div class="episode-list">${byDate(episodes).slice(0, 6).map((episode, index) => episodeCard(episode, index)).join("")}</div>${episodes.length > 6 ? '<a class="button button-quiet" href="#/search">浏览全部文稿 ↗</a>' : ""}</section>` : ""}`;
@@ -43,7 +43,7 @@
   function seriesPage(id) {
     const item = seriesMap.get(id);
     if (!item) return notFound();
-    document.title = `${item.title} · 文稿集`;
+    document.title = `${item.title} · 听稿`;
     main.innerHTML = `<div class="page-content"><nav class="breadcrumb" aria-label="面包屑"><a href="#/">所有系列</a><span aria-hidden="true">/</span><span>${safe(item.title)}</span></nav><section class="series-hero"><div><span class="eyebrow">PODCAST SERIES</span><h1>${safe(item.title)}</h1><p>${text(item.description || "这里收录本系列的完整对话，附摘要、章节与原视频时间戳。")}</p><div class="series-stats"><span>${item.episodes.length} 篇文稿</span><span>${Math.ceil(item.episodes.reduce((sum, episode) => sum + episode.duration_seconds, 0) / 60)} 分钟对话</span></div></div><span class="series-hero-mark" aria-hidden="true">“</span></section><section>${sectionHeading("ALL EPISODES", "全部单集", item.episodes.length)}<div class="episode-list">${byDate(item.episodes).map((episode, index) => episodeCard(episode, index, false)).join("")}</div></section></div>`;
   }
 
@@ -60,7 +60,7 @@
   function episodePage(id) {
     const episode = episodes.find(item => item.id === id);
     if (!episode) return notFound();
-    document.title = `${episode.title} · 文稿集`;
+    document.title = `${episode.title} · 听稿`;
     const speakers = new Map(episode.speakers.map((speaker, index) => [speaker.id, {...speaker, color: index % 6}]));
     const sourceURL = originalLink(episode);
     const segmentIndex = new Map(episode.segments.map((segment, index) => [segment.id, index]));
@@ -102,7 +102,7 @@
   }
 
   function searchPage(query) {
-    document.title = "搜索文稿 · 文稿集";
+    document.title = "搜索文稿 · 听稿";
     main.innerHTML = `<div class="page-content search-page"><span class="eyebrow">FIND A CONVERSATION</span><h1>你想读些什么？</h1><form class="search-form" role="search"><label class="sr-only" for="search-input">搜索标题、系列、人物和文稿内容</label><span aria-hidden="true">⌕</span><input type="search" id="search-input" name="q" placeholder="搜索标题、系列、人物或一句话…" value="${safe(query)}" autocomplete="off"><button type="submit">搜索 <span aria-hidden="true">↗</span></button></form><p class="search-hint">在 ${episodes.length} 篇文稿中，寻找值得重读的对话。</p><section id="search-results" aria-label="搜索结果"></section></div>`;
     const input = document.getElementById("search-input");
     const results = document.getElementById("search-results");
@@ -126,7 +126,7 @@
   }
 
   function notFound() {
-    document.title = "页面未找到 · 文稿集";
+    document.title = "页面未找到 · 听稿";
     main.innerHTML = `<div class="page-content">${empty("这篇文稿暂时不在书架上", "它可能尚未发布，或链接已经更改。", '<a class="button button-primary" href="#/">返回系列首页</a>')}</div>`;
   }
   function render() {

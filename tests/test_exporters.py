@@ -3,8 +3,8 @@
 from copy import deepcopy
 import pytest
 
-from video_to_markdown.exporters import export_episode, render_markdown
-from video_to_markdown.reading import reading_turns, segment_text_parts
+from podcast_scribe.exporters import export_episode, render_markdown
+from podcast_scribe.reading import reading_turns, segment_text_parts
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ def test_invalid_format_does_not_write(episode, tmp_path):
 
 
 def test_failed_pdf_preserves_previous_markdown(episode, tmp_path, monkeypatch):
-    import video_to_markdown.exporters as exporters
+    import podcast_scribe.exporters as exporters
 
     target = tmp_path / "fictional-export-test.md"
     target.write_text("previous version", encoding="utf-8")

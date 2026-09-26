@@ -167,7 +167,7 @@ def _public_api_info(ydl, url: str) -> dict:
         backups = stream.get("backupUrl") or stream.get("backup_url") or []
         if isinstance(backups, str):
             backups = [backups]
-        fmt["_vtm_backup_urls"] = list(dict.fromkeys(
+        fmt["_podcast_scribe_backup_urls"] = list(dict.fromkeys(
             item for item in backups if isinstance(item, str)
             and urlparse(item).scheme in ("http", "https") and item != fmt["url"]))[:2]
     title = data.get("title") or bvid
@@ -268,7 +268,7 @@ def _download_audio(ydl, info: dict) -> dict:
         return _single(ydl.process_ie_result(deepcopy(selected), download=True))
     except DownloadError as first_error:
         last_error = first_error
-        for backup_url in selected.get("_vtm_backup_urls", [])[:2]:
+        for backup_url in selected.get("_podcast_scribe_backup_urls", [])[:2]:
             alternative = deepcopy(selected)
             alternative.pop("formats", None)
             alternative.pop("requested_downloads", None)
@@ -279,5 +279,5 @@ def _download_audio(ydl, info: dict) -> dict:
                 last_error = backup_error
         raise ContentError(
             f"音频下载失败（{_source_reason(first_error)}）；来源提供的可用备用地址也未完成下载（{_source_reason(last_error)}）"
-            if selected.get("_vtm_backup_urls") else f"音频下载失败（{_source_reason(first_error)}）；来源未提供可用备用地址"
+            if selected.get("_podcast_scribe_backup_urls") else f"音频下载失败（{_source_reason(first_error)}）；来源未提供可用备用地址"
         ) from last_error

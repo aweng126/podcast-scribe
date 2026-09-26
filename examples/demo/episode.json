@@ -3,7 +3,7 @@
   "id": "demo-reading-room",
   "title": "一段对话，如何成为一篇可阅读的文稿",
   "description": "自制功能演示：用于检验人物区分、章节导航和文件导出。以下对话、人物及时间均为演示内容，不来自用户提供的 B站视频，也没有对应的录音。",
-  "source": {"platform": "demo", "url": "", "author": "Video to Markdown 功能演示"},
+  "source": {"platform": "demo", "url": "", "author": "听稿 / Podcast Scribe 功能演示"},
   "series": {"id": "demo-series", "title": "阅读室 · 功能演示", "description": "从声音到文字的产品体验样例。此系列仅用于本地预览，不作为真实播客发布。"},
   "duration_seconds": 180,
   "published_at": "",

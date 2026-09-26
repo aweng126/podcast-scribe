@@ -1,27 +1,29 @@
-# 安装与运行
+# 听稿安装与运行
 
-在仓库目录安装，或把整个目录作为可发现 skill 安装到所用 agent 的 skills 目录（不能只复制 SKILL.md）：
+在 `podcast-scribe` 仓库目录安装，或把整个 `podcast-scribe` 目录作为可发现 skill 安装到所用 agent 的 skills 目录（不能只复制 SKILL.md）：
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[test]'
-.venv/bin/python scripts/vtm.py doctor
+.venv/bin/podcast-scribe doctor
 ```
 
-`reportlab` 用于 PDF；`imageio-ffmpeg` 提供无需全局安装的 ffmpeg。中文 PDF 自动检测系统中文 TrueType 字体，或用 `VIDEO_TO_MARKDOWN_FONT` 指定有相应字形的 `.ttf` 字体。网络转写需在运行环境配置 `OPENAI_API_KEY`；不要在聊天、文稿或 Git 中保存密钥。依赖安装不等于实际模型可访问，`doctor` 不发 API 请求。
+安装后用 `.venv/bin/podcast-scribe` 运行命令；等价脚本入口为 `.venv/bin/python scripts/podcast_scribe.py`。目录更名或移动后，重新执行上述可编辑安装命令以刷新安装路径及命令入口。
+
+`reportlab` 用于 PDF；`imageio-ffmpeg` 提供无需全局安装的 ffmpeg。中文 PDF 自动检测系统中文 TrueType 字体，或用 `PODCAST_SCRIBE_FONT` 指定有相应字形的 `.ttf` 字体。网络转写需在运行环境配置 `OPENAI_API_KEY`；不要在聊天、文稿或 Git 中保存密钥。依赖安装不等于实际模型可访问，`doctor` 不发 API 请求。
 
 ## 单集生产
 
 ```sh
-.venv/bin/python scripts/vtm.py inspect 'https://www.bilibili.com/video/BV1GZbT6UE7o' --output output/source.json
-.venv/bin/python scripts/vtm.py ingest 'https://www.bilibili.com/video/BV1GZbT6UE7o' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
+.venv/bin/podcast-scribe inspect 'https://www.bilibili.com/video/BV1GZbT6UE7o' --output output/source.json
+.venv/bin/podcast-scribe ingest 'https://www.bilibili.com/video/BV1GZbT6UE7o' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
 ```
 
 本地备用路径：
 
 ```sh
-.venv/bin/python scripts/vtm.py transcribe '/path/to/episode.mp4' --id my-episode --title '本期标题' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
-.venv/bin/python scripts/vtm.py import '/path/to/transcript.json' --id my-episode --title '本期标题' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
+.venv/bin/podcast-scribe transcribe '/path/to/episode.mp4' --id my-episode --title '本期标题' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
+.venv/bin/podcast-scribe import '/path/to/transcript.json' --id my-episode --title '本期标题' --series-id my-series --series-title '系列名称' --output data/my-episode/episode.json
 ```
 
 上面两种输入选一种，不重复写到相同目标。`ingest/transcribe` 会将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。整段音频压缩为单声道 16 kHz、32 kbps MP3，上传前限制 24 MB；超限明确停止，要求导入已有整集说话人转写。第一版不实现独立音频分块之间的说话人匹配。相同内容与配置命中的成功转写缓存不会重复付费请求；失败响应不算成功缓存。
@@ -33,10 +35,10 @@ B站普通网页提取失败时，程序尝试正常公开元数据与播放 API
 ## 校对、导出与阅读站
 
 ```sh
-.venv/bin/python scripts/vtm.py edit data/my-episode/episode.json --edits output/editorial.json
-.venv/bin/python scripts/vtm.py validate data/my-episode/episode.json
-.venv/bin/python scripts/vtm.py export data/my-episode/episode.json --formats markdown pdf --output-dir output/exports
-.venv/bin/python scripts/vtm.py site data --preview --output-dir output/preview
+.venv/bin/podcast-scribe edit data/my-episode/episode.json --edits output/editorial.json
+.venv/bin/podcast-scribe validate data/my-episode/episode.json
+.venv/bin/podcast-scribe export data/my-episode/episode.json --formats markdown pdf --output-dir output/exports
+.venv/bin/podcast-scribe site data --preview --output-dir output/preview
 ```
 
 直接打开 `output/preview/index.html`。站点支持离线阅读、系列导航、全文搜索、章节定位和本地下载。第一次只有草稿时，正式站点为空是预期行为。
@@ -44,9 +46,9 @@ B站普通网页提取失败时，程序尝试正常公开元数据与播放 API
 完成实际校对后按 schema 文档应用 review 字段，然后：
 
 ```sh
-.venv/bin/python scripts/vtm.py publish data/my-episode/episode.json
-.venv/bin/python scripts/vtm.py export data/my-episode/episode.json --formats markdown pdf --output-dir output/exports
-.venv/bin/python scripts/vtm.py site data --output-dir output/site
+.venv/bin/podcast-scribe publish data/my-episode/episode.json
+.venv/bin/podcast-scribe export data/my-episode/episode.json --formats markdown pdf --output-dir output/exports
+.venv/bin/podcast-scribe site data --output-dir output/site
 ```
 
 只有 `output/site/` 是准备部署的静态目录。不要上传 `data/`、缓存、转写原始响应、诊断、编辑历史或 `.venv`。草稿预览与正式构建使用不同输出目录。`publish` 不执行部署、购域名或更改外部账户。

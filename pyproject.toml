@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "video-to-markdown"
+name = "podcast-scribe"
 version = "0.1.0"
 description = "Speaker-aware podcast transcripts, document exports and a static reading site"
 requires-python = ">=3.10"
@@ -13,13 +13,13 @@ dependencies = ["yt-dlp>=2026.8.19", "reportlab>=4.4", "imageio-ffmpeg>=0.6", "o
 test = ["pytest>=8", "pymupdf>=1.24"]
 
 [project.scripts]
-vtm = "video_to_markdown.cli:main"
+podcast-scribe = "podcast_scribe.cli:main"
 
 [tool.setuptools.package-data]
-video_to_markdown = ["assets/*"]
+podcast_scribe = ["assets/*"]
 
 [tool.setuptools.packages.find]
-include = ["video_to_markdown*"]
+include = ["podcast_scribe*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

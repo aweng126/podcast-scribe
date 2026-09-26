@@ -5,9 +5,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from video_to_markdown.exporters import export_episode
-from video_to_markdown.model import load_episode, save_episode
-from video_to_markdown.site import build_site
+from podcast_scribe.exporters import export_episode
+from podcast_scribe.model import load_episode, save_episode
+from podcast_scribe.site import build_site
 
 
 def main():

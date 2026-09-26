@@ -1,15 +1,15 @@
 ---
-name: video-to-markdown
+name: podcast-scribe
 description: 将 Bilibili 单集视频、本地音视频或带时间戳的转写整理为区分说话人的完整文稿，生成摘要与章节，导出 Markdown/PDF，并构建播客系列阅读站。适用于播客、访谈与对话内容归档；以音频为依据，不声称已理解未提取的视频画面。
 ---
 
-# Video to Markdown
+# 听稿 · Podcast Scribe
 
-本 Skill 的默认成品是：保留完整对话的整理稿、摘要、章节、说话人和时间戳。Markdown、PDF、网页来自同一份单集 JSON。用户可只选择其中一种输出。
+听稿将播客与访谈整理成可阅读、可检索、可导出的完整文稿。本 Skill 的默认成品是：保留完整对话的整理稿、摘要、章节、说话人和时间戳。Markdown、PDF、网页来自同一份单集 JSON。用户可只选择其中一种输出。
 
 ## 运行入口
 
-在此 skill 目录运行 `python scripts/vtm.py --help`。优先用项目 `.venv/bin/python`；没有环境时按 [工作流](references/workflow.md) 安装 `pyproject.toml` 的依赖。脚本亦可用绝对路径从其他目录运行。输出写到用户指定目录，未指定时使用任务工作区 `data/` 与 `output/`。
+在此 skill 目录运行 `.venv/bin/podcast-scribe --help`；也可用 `.venv/bin/python scripts/podcast_scribe.py --help`。没有环境时按 [工作流](references/workflow.md) 安装 `pyproject.toml` 的依赖。脚本亦可用绝对路径从其他目录运行。输出写到用户指定目录，未指定时使用任务工作区 `data/` 与 `output/`。
 
 ## 执行流程
 

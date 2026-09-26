@@ -4,6 +4,6 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from video_to_markdown.cli import main
+from podcast_scribe.cli import main
 
 raise SystemExit(main())
