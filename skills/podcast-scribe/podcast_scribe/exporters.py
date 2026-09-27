@@ -264,6 +264,22 @@ def _xml(value: object) -> str:
     return html.escape(clean, quote=True).replace("\n", "<br/>")
 
 
+def _pdf_paragraph(markup: str, style):
+    from reportlab.platypus import Paragraph
+
+    paragraph = Paragraph(markup, style)
+    for fragment in paragraph.frags:
+        if (not fragment.text
+                and getattr(getattr(fragment, "cbDefn", None), "kind", None) == "anchor"):
+            # ReportLab's CJK line breaker calls ord() while looking backwards
+            # through Latin words, including empty anchor callback fragments.
+            # A zero-width placeholder keeps that scan valid. Anchor callbacks
+            # still have width 0 and only register a bookmark: their text is
+            # never drawn, so this adds no glyph or character to the PDF text.
+            fragment.text = "\u200b"
+    return paragraph
+
+
 def _pdf_turn_paragraphs(turn: dict) -> list[tuple[str, bool]]:
     """Lay out flowing speech while retaining precise, invisible anchors."""
     parts = segment_text_parts(turn["segments"])
@@ -310,7 +326,7 @@ def _render_pdf(episode: dict, path: Path, font: str) -> None:
     from reportlab.lib.enums import TA_LEFT
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Spacer
 
     ink = colors.HexColor("#233A3D")
     teal = colors.HexColor("#276F72")
@@ -339,10 +355,10 @@ def _render_pdf(episode: dict, path: Path, font: str) -> None:
             content = _text(text)
             boundary = re.search(r"[。！？.!?]", content[160:320])
             split = 161 + boundary.start() if boundary else 240
-            story.append(Paragraph(_xml(content[:split]), styles["continuation"]))
-            story.append(Paragraph(_xml(content[split:]), styles["body"]))
+            story.append(_pdf_paragraph(_xml(content[:split]), styles["continuation"]))
+            story.append(_pdf_paragraph(_xml(content[split:]), styles["body"]))
             return
-        story.append(Paragraph(_text(text) if markup else _xml(text), styles[style]))
+        story.append(_pdf_paragraph(_text(text) if markup else _xml(text), styles[style]))
 
     add(title, "title")
     if episode.get("is_demo"):

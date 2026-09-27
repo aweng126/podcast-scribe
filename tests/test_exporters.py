@@ -166,6 +166,39 @@ def test_continuous_speech_preserves_chapter_targets_without_repeated_labels(epi
     assert episode == original
 
 
+def test_pdf_cjk_latin_wrap_keeps_inline_anchor_text_and_destinations(episode, tmp_path):
+    pytest.importorskip("reportlab")
+    pypdf = pytest.importorskip("pypdf")
+    # The second anchor falls within the Latin-word backtracking window of
+    # ReportLab's CJK wrapper. An empty callback fragment used to reach ord('')
+    # here, although simple all-Chinese anchored paragraphs rendered correctly.
+    episode["segments"] = [
+        {"id": "s1", "start": 0, "end": 10, "speaker_id": "a", "text": "中" * 36},
+        {"id": "s2", "start": 10, "end": 20, "speaker_id": "a", "text": "A" * 90},
+        {"id": "s3", "start": 20, "end": 30, "speaker_id": "a", "text": "结尾 <b>原样</b> & 保留。"},
+    ]
+    episode["chapters"] = [
+        {"title": f"虚构章节 {i}", "start": row["start"], "segment_id": row["id"]}
+        for i, row in enumerate(episode["segments"], 1)
+    ]
+    original = deepcopy(episode)
+    path = export_episode(episode, tmp_path, ["pdf"])["pdf"]
+    reader = pypdf.PdfReader(path)
+    visible = "".join(page.extract_text() for page in reader.pages)
+    dialogue = "".join(segment_text_parts(episode["segments"]))
+    assert "".join(dialogue.split()) in "".join(visible.split())
+    assert "\u200b" not in visible
+    destinations = [annotation.get_object()["/Dest"]
+                    for page in reader.pages for annotation in page.get("/Annots", [])
+                    if "/Dest" in annotation.get_object()]
+    assert len(destinations) == len(episode["chapters"])
+    # All chapter links resolve to distinct positions within this same turn.
+    positions = [tuple(str(value) for value in dest) for dest in destinations]
+    assert len(set(positions)) == len(destinations)
+    assert all(dest[0].get_object()["/Type"] == "/Page" for dest in destinations)
+    assert episode == original
+
+
 def test_turns_keep_real_speaker_changes_and_unknowns_separate(episode):
     episode["segments"] = [
         {"speaker_id": speaker, "start": i, "end": i + 1, "text": str(i)}
