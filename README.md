@@ -1,85 +1,42 @@
 # 听稿 · Podcast Scribe
 
-用于整理播客与访谈的 LLM Skill，保留完整对话、说话人和时间戳，生成摘要与章节。
+将播客与访谈整理为完整文稿的 Agent Skill。支持 Bilibili 单集链接、本地音视频和 JSON/SRT/VTT 转写，保留说话人与时间戳，生成摘要、章节、Markdown 和中文 PDF。
 
 [社区阅读站](https://aweng126.github.io/podcast-scribe/)
 
-## 功能
-
-- 支持 Bilibili 单集链接、本地音视频及 JSON/SRT/VTT 转写；长音视频自动分片，支持缓存续跑。
-- 按批整理完整文稿，只读取所需文本、提交增量修改，保留原始转写与编辑历史。
-- 利用已有字幕做本地对照，输出差异与缺失清单；画面字幕可通过本地 OCR 提取，不自动标为已校对。
-- 导出本地 Markdown 与中文 PDF，可选生成离线阅读页面。
-- 完成后邀请分享，用户同意后准备投稿材料，审核后收录到公共阅读站。
-
 ## 安装
 
-需要 Node.js/npm 和 Python 3.10+，以下命令适用于 macOS / Linux 上可执行本地脚本的 Codex CLI / IDE。
-
-在任务工作区使用 [Skills CLI](https://github.com/vercel-labs/skills) 安装：
+适用于 macOS / Linux 上可执行本地脚本的 Codex CLI / IDE。需要 Node.js/npm 和 Python 3.10+，在任务工作区执行：
 
 ```sh
 npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 ```
 
-Skill 安装到当前项目的 `.agents/skills/podcast-scribe/`。首次运行时，Agent 会检查并按需初始化 Python 依赖，之后复用已有环境；无需每次手动选择解释器。
-
-仅处理已有转写、导出 Markdown、生成离线页面和分享文件时，无需第三方 Python 依赖。源码仓库中可直接使用；全局安装与手动安装见[安装与运行](skills/podcast-scribe/references/workflow.md#安装与首次调用)。
-
-- **音视频转写**：需要在运行环境中配置 `OPENAI_API_KEY`，音频会发送到 OpenAI API，并产生接口费用。导入已有转写无需 API。
-- **中文 PDF**：需要可嵌入的中文 TrueType 字体，可通过 `PODCAST_SCRIBE_FONT` 指定字体路径。
-- **画面字幕 OCR**：需要 Tesseract 及简体中文、英文语言包；已有字幕文件对照无需这些依赖。
+首次运行由 Agent 检查并按需安装运行依赖。音视频转写需在运行环境中配置 `OPENAI_API_KEY`，音频会发送到 OpenAI API 并产生接口费用；导入已有转写无需转写 API。
 
 ## 使用
 
-在保存文稿的任务工作区中启动 Codex，只需提供 Skill 名称和链接：
+在同一工作区启动 Codex，只需提供 Skill 名称和链接：
 
 ```text
 使用 $podcast-scribe https://www.bilibili.com/video/BV1XNtJ6UEmm
 ```
 
-或使用已有转写：
+也可将链接换成本地文件路径，如 `./episode.mp3` 或 `./input.srt`。
 
-```text
-使用 $podcast-scribe ./input.json
-```
+默认自动整理并交付本地 Markdown/PDF，无需逐条手动核对，输出位于 `output/<id>/`。长音视频自动分片，支持中断续跑。
 
-默认采用自动模式：按中文阅读习惯整理并保留原意，保留完整对话、说话人与时间戳，生成摘要、章节、Markdown 和 PDF，完成后直接交付，无需用户逐条核对。文稿保存在 `data/<id>/episode.json`，导出文件保存在 `output/<id>/`；已有同一输入的文稿会继续整理。
-
-Skill 根据官方节目资料确认所属系列，复用已有名称和别名；无法确认时显示“未分类”，不影响交付或投稿。维护者在收录审核时统一系列归属，见[系列归属](skills/podcast-scribe/references/series.md)。
-
-需要逐项核验时，在请求中加上“使用精准模式”。Agent 会结合字幕与原音检查，并把仍有疑点的片段列为带时间戳的清单供用户确认。自动整理、用户接受当前稿和来源精校会分别记录，不将自动稿标为逐句听音结果。
-
-无需另外指定格式、路径、分片或解释器。只有需要调整默认行为时才补充要求，例如“只导出 Markdown”或“生成本地阅读页预览”。
-
-四小时等长节目使用相同入口，失败后可复用成功分片继续处理；跨片说话人对应仍须校对。机制与限制见[长音视频](skills/podcast-scribe/references/long-audio.md)，减少上下文开销的流程见[分批整理](skills/podcast-scribe/references/editing.md)。
-
-B站访问受限时，可先在浏览器正常登录，再授权使用该浏览器的登录态重试，具体见[访问受限时的处理](skills/podcast-scribe/references/workflow.md#b站访问受限时)。
-
-新 B站任务自动尝试已有字幕辅助整理；全片画面字幕 OCR 与逐项回听用于精准模式或用户明确要求时。已有稿件可直接说“用字幕辅助校对这篇文稿”，流程见[字幕辅助核验](skills/podcast-scribe/references/subtitles.md)。
+需要逐项核验时加上“使用精准模式”；需要离线页面时加上“生成本地阅读页”。
 
 ## 分享（可选）
 
-[提交文稿](https://github.com/aweng126/podcast-scribe/issues/new?template=share.yml) · 使用 GitHub 账号在网页投稿，无需配置 Token 或仓库写入权限。
+交付后会邀请分享。愿意分享时提供公开署名，Skill 生成投稿 JSON 和预填链接，由你在 GitHub 网页上传提交，维护者审核后收录到社区阅读站；不会自动上传。
 
-每次转录或文稿整理完成并交付本地文件后，Agent 会在对话中邀请分享一次：
-
-> 是否愿意将这篇文稿分享到 Podcast Scribe 社区阅读站？可以仅保存在本地；如果愿意，请告诉我公开署名。
-
-1. 回复“仅保存在本地”，或“愿意分享，署名为「我的名字」”。不回复时保持本地；已明确不分享时不重复邀请。
-2. 同意分享并完成所选模式的整理后，Skill 给出公开 JSON 文件和可点击的投稿链接，预填标题、来源、署名及内容校验摘要。
-3. 打开该链接，将公开 JSON 拖入“投稿 JSON”框，检查信息、补齐空项，勾选公开分享确认并提交。机器人校验并创建内容 PR，维护者审核合并后由 GitHub Pages 自动部署。
-
-GitHub Issue 附件上限为 25 MB；超过时使用公开 GitHub Release 文件链接投稿，本项目单稿上限仍为 512 MiB。
-
-尚未整理的原始转写需先完成整理；精准模式须完成疑点确认。生成分享文件不会自动上传；公开仓库的 Issue 和附件在收录审核前就可被他人访问，附件上传前需检查内容。
-
-也可主动要求分享。完整步骤见[分享、修改与撤稿指引](skills/podcast-scribe/references/sharing.md)。需要撤稿时在原 Issue 联系维护者，移除内容并部署成功后下线。
+投稿内容公开，完整流程见[分享、修改与撤稿](skills/podcast-scribe/references/sharing.md)。
 
 ## 文档
 
 - [Skill 指令](skills/podcast-scribe/SKILL.md)
 - [安装与运行](skills/podcast-scribe/references/workflow.md)
-- [数据格式与校对约定](skills/podcast-scribe/references/schema.md)
 - [社区投稿与部署](docs/community.md)
 - [开发与验收](docs/development.md)
