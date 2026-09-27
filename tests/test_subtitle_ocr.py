@@ -173,6 +173,11 @@ def test_tsv_retains_low_confidence_negation_and_flags_whole_cue():
         module._parse_tsv("error instead of TSV")
 
 
+def test_tsv_literal_quotes_do_not_swallow_following_words():
+    result = module._parse_tsv(tsv([('"', 40), ('"', 45), ("不", 5), ("是", 90), ("10", 95)]))
+    assert result == {"text": '" " 不是 10', "confidence": 61.667, "low_confidence": True}
+
+
 def test_per_frame_timeout_is_failure(monkeypatch, tmp_path):
     def timeout(*args, **kwargs):
         assert kwargs["timeout"] == module.OCR_TIMEOUT

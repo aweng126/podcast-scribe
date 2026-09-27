@@ -158,7 +158,8 @@ def _text(value: str) -> str:
 
 
 def _parse_tsv(tsv: str) -> dict:
-    reader = csv.DictReader(io.StringIO(tsv), delimiter="\t")
+    # Tesseract emits literal quotes, not CSV-escaped quoted fields.
+    reader = csv.DictReader(io.StringIO(tsv), delimiter="\t", quoting=csv.QUOTE_NONE)
     if not reader.fieldnames or not {"level", "block_num", "par_num", "line_num", "conf", "text"} <= set(reader.fieldnames):
         raise ContentError("Tesseract 未返回有效 TSV，当前批次未记为成功")
     lines, confidence = {}, []
