@@ -194,9 +194,9 @@ def save_episode(path: Path, ep: dict):
 
 def apply_edits(ep: dict, edits: dict) -> dict:
     """Patch by stable IDs; never replace raw text, timestamps, or segment order."""
-    allowed = {"title", "description", "series", "speakers", "segments", "summary", "chapters", "review", "references"}
+    allowed = {"title", "description", "series", "speakers", "remove_speakers", "segments", "summary", "chapters", "review", "references"}
     if not isinstance(edits, dict) or set(edits) - allowed:
-        raise ContentError("编辑仅接受 title/description/series/speakers/segments/summary/chapters/review/references")
+        raise ContentError("编辑仅接受 title/description/series/speakers/remove_speakers/segments/summary/chapters/review/references")
     result = deepcopy(ep)
     result["status"] = "draft"
     result["artifacts"] = {}
@@ -227,6 +227,20 @@ def apply_edits(ep: dict, edits: dict) -> dict:
             ):
                 lookup[ident]["review_status"] = "edited"
             lookup[ident].update(patch)
+    removed = edits.get("remove_speakers", [])
+    if not isinstance(removed, list) or any(not isinstance(ident, str) for ident in removed):
+        raise ContentError("remove_speakers 必须是说话人 ID 列表")
+    removed_ids = set(removed)
+    if len(removed_ids) != len(removed):
+        raise ContentError("remove_speakers 中的说话人 ID 重复")
+    people = {person["id"] for person in result["speakers"]}
+    used = {segment.get("speaker_id") for segment in result["segments"]}
+    for ident in removed:
+        if ident not in people:
+            raise ContentError(f"不存在的说话人：{ident}")
+        if ident in used:
+            raise ContentError(f"说话人 {ident} 仍被段落引用；请先逐段重新分配 speaker_id")
+    result["speakers"] = [person for person in result["speakers"] if person["id"] not in removed_ids]
     if "review" in edits:
         if not isinstance(edits["review"], dict) or set(edits["review"]) - set(result["review"]) or any(type(v) is not bool for v in edits["review"].values()):
             raise ContentError("review 仅接受人物/内容校对布尔值")

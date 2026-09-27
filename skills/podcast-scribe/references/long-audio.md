@@ -18,7 +18,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" transcribe '/path/to/four-hour.mp4'
 
 每片 API 返回的 `A`、`B` 都是该片自己的标签，不能直接合并。程序优先从已转写片段选择不与其他段落重叠的 2–6 秒独立发言，建立最多 4 个匿名声源参考。之后的请求通过 `known_speaker_names` 与 `known_speaker_references` 携带参考；只有响应明确返回对应参考名时才复用同一个说话人 ID。
 
-参考不足、超过 4 人或接口未匹配时，保留 `chunk-0002:A` 这类片级来源标签，对应段落标为待核对。同一人可能因此暂时有多个 ID；回听确认后通过 `edit` 调整段落的 `speaker_id`，不要依据重复的字母猜测是同一人。参考匹配也可能出错，所以整集 `speakers_confirmed` 保持 `false`，不会猜真实姓名。
+参考不足、超过 4 人或接口未匹配时，保留 `chunk-0002:A` 这类片级来源标签，对应段落标为待核对。同一人可能因此暂时有多个 ID；回听核验，或按 Skill 中用户明确的双人访谈语境归并规则，使用 `edit` 调整段落的 `speaker_id`。语境推定须记录依据及仍需复核的片段，不要依据重复的字母猜测是同一人。参考匹配也可能出错，所以整集 `speakers_confirmed` 保持 `false`，不会猜真实姓名。
 
 ## 缓存与恢复
 
