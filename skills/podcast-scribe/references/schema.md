@@ -16,6 +16,8 @@
 - `artifacts: {markdown, pdf}`：生成路径。编辑后清空，防止页面下载过期版本。
 - 可选 `is_demo: true`：仅用于明确演示，不能发布。
 
+系列使用目录中的稳定 ID 与标准名称；无法确定时为 `inbox` / “未分类”。单独调整归属可使用 `classify`，保存来源并保留已有正文与校对状态；普通 `edit` 仍遵循下面的校对重置规则。具体见 [系列归属](series.md)。
+
 长文先通过 `status` 和 `batch` 读取所需范围，具体预算、续读及 `edit --batch` 的过期保护见 [分批整理](editing.md)。整理时写只含变化字段的 edits JSON，不直接覆盖原记录：
 
 ```json

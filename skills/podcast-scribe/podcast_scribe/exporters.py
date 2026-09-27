@@ -138,8 +138,9 @@ def _chapter_targets(episode: dict) -> list[tuple[dict, int | None]]:
 
 
 def _metadata(episode: dict) -> list[tuple[str, str]]:
+    from .series import display_series
     source = episode.get("source") or {}
-    series = episode.get("series") or {}
+    series = display_series(episode.get("series") or {})
     result = []
     for label, value in (
         ("系列", series.get("title")),

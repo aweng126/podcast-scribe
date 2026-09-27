@@ -110,6 +110,33 @@ def test_freezes_one_content_file_and_reuses_pr_without_refetch(submission):
     assert all(method == "GET" for method, _, _ in api.calls)
 
 
+def test_pr_explains_unknown_series_and_keeps_original_digest(submission, monkeypatch):
+    monkeypatch.setattr(intake, "load_catalog", lambda: {"schema_version": 1, "series": []})
+    submission["episode"]["series"] = {"id": "inbox", "title": "待归类", "description": ""}
+    record = intake.make_record(issue_event(submission), intake.REPOSITORY, lambda _: submission)
+    before = deepcopy(record)
+    body = intake.pull_body(record)
+    assert "投稿系列：待归类（ID：inbox）" in body
+    assert "系列尚未确定，可先保留未分类" in body
+    assert "docs/community.md#系列归属维护" in body
+    assert "不改动固定投稿或摘要" in body
+    assert record["provenance"]["payload_sha256"] in body
+    assert record == before
+
+
+def test_pr_distinguishes_new_and_known_series_without_rendering_submitted_markdown(submission, monkeypatch):
+    submission["episode"]["series"]["title"] = "@someone <img src=x> [点击](https://example.com)"
+    record = intake.make_record(issue_event(submission), intake.REPOSITORY, lambda _: submission)
+    monkeypatch.setattr(intake, "load_catalog", lambda: {"schema_version": 1, "series": []})
+    body = intake.pull_body(record)
+    assert "系列尚未进入维护目录" in body
+    assert "@someone" not in body and "<img" not in body and "[点击]" not in body
+    monkeypatch.setattr(intake, "load_catalog", lambda: {"schema_version": 1, "series": [{"id": "test"}]})
+    body = intake.pull_body(record)
+    assert "请确认本期确实属于该系列" in body
+    assert "系列尚未进入维护目录" not in body
+
+
 @pytest.mark.parametrize("merged", [True, False])
 def test_closed_or_accepted_submission_requires_new_issue(submission, merged):
     api = FakeAPI()

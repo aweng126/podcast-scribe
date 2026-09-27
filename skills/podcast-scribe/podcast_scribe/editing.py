@@ -22,6 +22,7 @@ def episode_digest(episode: dict) -> str:
 
 
 def editing_status(episode: dict) -> dict:
+    from .series import display_series
     segments = episode["segments"]
     pending = [s for s in segments if s.get("review_status") != "reviewed"]
     review = episode.get("review", {})
@@ -30,6 +31,7 @@ def editing_status(episode: dict) -> dict:
     completion_status = (completion_basis or "legacy_checked") if completed else "incomplete"
     return {
         "episode_id": episode["id"], "revision": episode.get("revision", 1),
+        "series": display_series(episode.get("series", {})),
         "segments": len(segments), "reviewed": len(segments) - len(pending),
         "remaining": len(pending),
         "states": dict(sorted(Counter(s.get("review_status", "unreviewed") for s in segments).items())),

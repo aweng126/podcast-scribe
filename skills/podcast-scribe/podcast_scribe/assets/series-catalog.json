@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "series": [
+    {
+      "id": "zhang-xiaojun-business",
+      "title": "张小珺Jùn｜商业访谈录",
+      "description": "张小珺主持的商业访谈节目。",
+      "aliases": ["张小珺商业访谈录"],
+      "sources": [
+        {
+          "title": "小宇宙官方节目页",
+          "url": "https://www.xiaoyuzhoufm.com/podcast/626b46ea9cbbf0451cf5a962"
+        }
+      ]
+    }
+  ]
+}

@@ -17,6 +17,8 @@ import tempfile
 
 from .exporters import _md, render_markdown
 from .reading import reading_turns, segment_text_parts
+from .series import (UNCATEGORIZED, display_series, load_catalog, resolve_series,
+                     validate_catalog, validate_evidence_url)
 from .share import MAX_SUBMISSION_BYTES, submission_digest, submission_episode, validate_submission
 
 
@@ -29,6 +31,78 @@ _OWNED = re.compile(r"(?:episodes/[0-9a-f]{64}(?:-[0-9]{5})?\.json|downloads/[0-
 PAGED_TEXT_BYTES = 1024 * 1024
 PAGE_TEXT_BYTES = 256 * 1024
 MAX_SITE_BYTES = 1_000_000_000
+MAX_SERIES_OVERRIDES_BYTES = 1024 * 1024
+
+
+def load_series_overrides(path: Path) -> dict:
+    """Load a bounded maintainer file, rejecting duplicate keys and symlinks."""
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Series overrides must be a regular JSON file.")
+    with path.open("rb") as stream:
+        payload = stream.read(MAX_SERIES_OVERRIDES_BYTES + 1)
+    if len(payload) > MAX_SERIES_OVERRIDES_BYTES:
+        raise ValueError("Series overrides exceed 1 MiB.")
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Series overrides have a duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    def constant(value):
+        raise ValueError(f"Series overrides have a non-finite JSON value: {value}")
+
+    try:
+        return json.loads(payload.decode("utf-8"), object_pairs_hook=unique, parse_constant=constant)
+    except (UnicodeError, ValueError, RecursionError) as error:
+        raise ValueError("Invalid series overrides JSON.") from error
+
+
+def validate_series_overrides(value: object, catalog: dict) -> dict:
+    """Validate issue-specific display choices without editing frozen records.
+
+    A removed Issue may retain an otherwise valid mapping, so withdrawing a
+    transcript never depends on cleaning up this file in the same commit.
+    """
+    if (not isinstance(value, dict) or set(value) != {"schema_version", "issues"}
+            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or not isinstance(value["issues"], dict) or len(value["issues"]) > 10000):
+        raise ValueError("Series overrides require schema_version=1 and an issues object.")
+    known = {"inbox", *(item["id"] for item in catalog["series"])}
+    for number, override in value["issues"].items():
+        if not isinstance(number, str) or not re.fullmatch(r"[1-9][0-9]*", number):
+            raise ValueError("Series override keys must be positive Issue numbers.")
+        if not isinstance(override, dict) or set(override) != {"series_id", "evidence_url"}:
+            raise ValueError("Each series override requires only series_id and evidence_url.")
+        if not isinstance(override["series_id"], str) or override["series_id"] not in known:
+            raise ValueError("Series override series_id must exist in the series catalog.")
+        validate_evidence_url(override["evidence_url"])
+    return deepcopy(value)
+
+
+def _apply_series(episode: dict, record: dict, catalog: dict, overrides: dict) -> None:
+    """Apply classification only to an isolated renderer episode."""
+    number = record["provenance"]["issue_url"].rsplit("/", 1)[1]
+    override = overrides["issues"].get(number)
+    original = record["submission"]["episode"]["series"]
+    series_id = override["series_id"] if override else original["id"]
+    canonical = (UNCATEGORIZED if override and series_id == "inbox" else
+                 next((item for item in catalog["series"] if item["id"] == series_id), original))
+    if not override and canonical is not original:
+        try:
+            canonical = resolve_series(series_id=series_id, series_title=original["title"], catalog=catalog)
+        except ValueError as error:
+            raise ValueError(f"Issue #{number} series ID matches the catalog but its title does not; "
+                             "confirm the title alias or add an explicit Issue series override.") from error
+    episode["series"] = display_series({key: canonical[key] for key in ("id", "title", "description")})
+    if override:
+        episode["references"] = [*episode["references"], {
+            "title": "节目系列来源（维护者确认）",
+            "url": override["evidence_url"],
+        }]
 
 
 def validate_record(record: object) -> dict:
@@ -158,13 +232,17 @@ def _check_output_path(out_dir: Path, relative: str) -> None:
         raise ValueError(f"Generated output must be a file: {candidate}")
 
 
-def build_public_site(records: list[dict], out_dir: Path) -> Path:
+def build_public_site(records: list[dict], out_dir: Path, *, series_catalog: dict | None = None,
+                      series_overrides: dict | None = None) -> Path:
     """Validate the complete approved library, then build a static Pages site.
 
     No input can name an output path or a local artifact. All downloads are
     rendered afresh. Rebuilds remove only files owned by the previous manifest.
     Invalid input leaves an existing site unchanged.
     """
+    catalog = load_catalog() if series_catalog is None else validate_catalog(series_catalog)
+    overrides = validate_series_overrides(
+        {"schema_version": 1, "issues": {}} if series_overrides is None else series_overrides, catalog)
     checked = [validate_record(record) for record in records]
     for field, values in (
         ("episode IDs", [item["submission"]["episode"]["id"] for item in checked]),
@@ -175,10 +253,10 @@ def build_public_site(records: list[dict], out_dir: Path) -> Path:
             raise ValueError(f"Public library {field} must be unique.")
     checked.sort(key=lambda item: item["submission"]["episode"]["id"])
     with tempfile.TemporaryDirectory(prefix="podcast-scribe-public-") as temporary:
-        return _build_checked_site(checked, out_dir, Path(temporary))
+        return _build_checked_site(checked, out_dir, Path(temporary), catalog, overrides)
 
 
-def _build_checked_site(checked, out_dir, staging):
+def _build_checked_site(checked, out_dir, staging, series_catalog, series_overrides):
     files = []
     total = 0
     def emit(name, content):
@@ -192,6 +270,7 @@ def _build_checked_site(checked, out_dir, staging):
         files.append(name)
 
     catalogue, search = [], []
+    series_titles = {}
     paginated_count = 0
     for record in checked:
         identifier = record["submission"]["episode"]["id"]
@@ -199,11 +278,18 @@ def _build_checked_site(checked, out_dir, staging):
         text_bytes = sum(len(segment["text"].encode("utf-8")) for segment in record["submission"]["episode"]["segments"])
         paginated = text_bytes > PAGED_TEXT_BYTES
         public = _paged_episode(record, filename, emit) if paginated else _episode(record, filename)
+        _apply_series(public, record, series_catalog, series_overrides)
+        series_id, series_title = public["series"]["id"], public["series"]["title"]
+        if series_id in series_titles and series_titles[series_id] != series_title:
+            raise ValueError(f"Public series ID {series_id!r} has conflicting titles; resolve its Issue mappings before publication.")
+        series_titles[series_id] = series_title
         paginated_count += int(paginated)
         catalogue.append(_metadata(public, filename))
         emit(f"episodes/{filename}.json", _json(public))
         if not paginated:
-            markdown = render_markdown(submission_episode(record["submission"]))
+            renderer_episode = submission_episode(record["submission"])
+            _apply_series(renderer_episode, record, series_catalog, series_overrides)
+            markdown = render_markdown(renderer_episode)
             markdown += (
                 "\n## 投稿信息\n\n"
                 + "- **投稿署名**：" + _md(record["submission"]["attribution"]) + "\n"
@@ -224,6 +310,7 @@ def _build_checked_site(checked, out_dir, staging):
     template = (_ASSETS / "index.html").read_text(encoding="utf-8")
     emit("index.html", template.replace("<!-- TRANSCRIPT_DATA -->", serialized))
     emit("search-index.json", _json({"schema_version": 1, "episodes": search}))
+    emit("series-catalog.json", _json(series_catalog))
     for name in ("app.js", "app.css"):
         emit(name, (_ASSETS / name).read_text(encoding="utf-8"))
     emit(".nojekyll", "")

@@ -40,6 +40,34 @@ python3 -m http.server 8000 --bind 127.0.0.1 --directory output/site
 
 投稿记录保留 `review.mode` 与 `review.basis`（旧稿可缺省），阅读站区分自动整理、用户接受和来源精校。自动模式不要求投稿人另做逐句听音；维护者仍审核是否收录。
 
+## 系列归属维护
+
+Skill 在导出和投稿前负责依据官方节目资料填写系列，用户可补充信息；维护者审核最终归属。PR 会显示投稿系列及是否进入目录。无法确定时允许保留“未分类”，不阻止收录；校对状态与节目分类独立。
+
+标准目录为 [`skills/podcast-scribe/podcast_scribe/assets/series-catalog.json`](../skills/podcast-scribe/podcast_scribe/assets/series-catalog.json)。每项包含稳定 `id`、标准 `title`、`description`、`aliases` 和官方 `sources`（`title` / `url`）。新节目先确认官方名称与来源，再新增；同一节目的不同写法加入别名，避免新增重复系列。更名时保留原 ID，修改标题并将旧名保留为别名，站点会统一展示标准名称。构建会拒绝重名、歧义别名和同 ID 的未解决名称冲突。
+
+**纠正单篇归属：** 在这份投稿的 PR 分支中，编辑 [`content/series-overrides.json`](../content/series-overrides.json)，在 `issues` 内添加原投稿 Issue 编号（不是 PR 编号），并保留其他记录。例如将假设的 Issue #17 归到已核实的节目：
+
+```json
+{
+  "schema_version": 1,
+  "issues": {
+    "17": {
+      "series_id": "zhang-xiaojun-business",
+      "evidence_url": "https://www.xiaoyuzhoufm.com/podcast/626b46ea9cbbf0451cf5a962"
+    }
+  }
+}
+```
+
+用实际 Issue 编号、目录 ID 和能够证明本期归属的官方链接替换示例。需要撤销错误分类但没有可靠替代时，可使用保留 ID `inbox`，来源链接记录本次核查对象。分类正确且 ID 已在目录中时无需添加覆盖记录。
+
+运行 `python3 scripts/build_public_site.py`，检查构建和 PR 中的 `Community validation`，确认后合并。目录或覆盖文件修改都会触发 Pages 部署；已收录稿的分类修改也走普通 PR。阅读页、目录、搜索及站内 Markdown 使用最终归属，维护者的依据链接会显示在参考来源中。
+
+分类覆盖只调整展示副本，冻结投稿 JSON、原始 SHA-256、正文及本地文稿保持不变。不要直接改 `content/episodes/issue-N.json` 中的系列并重算摘要，那会丢失原投稿的追溯关系。自动收录重跑仍只识别原快照；人工加入分类文件后若创建 PR 的重试提示分支包含非投稿数据，由维护者核对并完成 PR，不让机器人覆盖分支。
+
+公共站同步发布 `series-catalog.json`，安装的 Skill 可读取该目录复用标准名称。目录只包含节目信息，不含用户文稿。撤稿时可一并清理该 Issue 的覆盖条目；有效的遗留映射不会阻塞撤稿构建。删除或合并系列前先处理引用它的覆盖记录。
+
 ## 修改已收录文稿
 
 用户修订本地稿并重新完成所选模式后，通过新 Issue 投稿，在评论中提供旧 Issue 链接。新投稿 PR 尚未合并时，维护者切换到它的 `community/issue-<新编号>` 分支，删除旧的 `content/episodes/issue-<旧编号>.json` 及存在的 `content/episodes/issue-<旧编号>/` 分片目录，将删除提交到同一个 PR 分支。核对新增与删除的是同一单集，再运行检查并合并。

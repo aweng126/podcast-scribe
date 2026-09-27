@@ -15,6 +15,7 @@ import shutil
 from urllib.parse import urlsplit
 
 from .reading import reading_turns, segment_text_parts
+from .series import display_series
 
 
 _ASSETS = Path(__file__).with_name("assets")
@@ -66,7 +67,7 @@ def _copy_downloads(episode: dict, out_dir: Path, identifier: str) -> dict:
 def _public_episode(episode: dict, out_dir: Path, identifier: str) -> dict:
     """Select public reading data, excluding original paths and raw ASR text."""
     source = episode.get("source") or {}
-    series = episode.get("series") or {}
+    series = display_series(episode.get("series") or {})
     series_id = _text(series.get("id")) or "uncategorized"
     review = episode.get("review") or {}
     public = {

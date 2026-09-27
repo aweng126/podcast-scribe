@@ -17,8 +17,9 @@ def _read(path):
 
 
 def _series(parser):
-    parser.add_argument("--series-id", default="inbox")
-    parser.add_argument("--series-title", default="待归类")
+    parser.add_argument("--series-id", help="复用系列目录中的 ID；未知系列需同时提供名称")
+    parser.add_argument("--series-title", help="已核实的节目名称；识别目录别名，缺省为未分类")
+    parser.add_argument("--series-catalog", type=Path, help="可选的系列目录 JSON；默认使用 Skill 内置目录")
 
 
 def _output(parser):
@@ -50,10 +51,18 @@ def _new_destination(path):
         raise ContentError(f"文件已存在，已保留人工修改：{path}。请使用 edit/export 或指定新的输出路径。")
 
 
+def _requested_series(args):
+    from .series import load_catalog, resolve_series
+    return resolve_series(series_id=args.series_id, series_title=args.series_title,
+                          catalog=load_catalog(args.series_catalog))
+
+
 def _save_new(args, metadata, segments, speakers):
     from .defaults import save_new_episode
-    ep = new_episode(metadata, segments, speakers, series_id=args.series_id,
-                     series_title=args.series_title, review_mode=args.review_mode)
+    series = args.resolved_series
+    ep = new_episode(metadata, segments, speakers, series_id=series["id"],
+                     series_title=series["title"], review_mode=args.review_mode)
+    ep["series"] = series
     if "input_identity" in metadata:
         ep["input_identity"] = metadata["input_identity"]
     if getattr(args, "demo", False):
@@ -122,6 +131,15 @@ def parser():
                    help="省略时 auto 使用 automated，precise 使用 source_checked；user_accepted 仅用于用户明确接受当前稿")
     p = sub.add_parser("status", help="查看精简校对进度，不输出全文")
     p.add_argument("episode", type=Path)
+    p = sub.add_parser("series-list", help="读取可复用的节目系列、别名及来源；不联网")
+    p.add_argument("--catalog", type=Path, help="已下载的社区系列目录；省略时使用 Skill 内置目录")
+    p = sub.add_parser("classify", help="根据已核实来源保存系列归属，保留正文与校对状态")
+    p.add_argument("episode", type=Path)
+    p.add_argument("--series-id")
+    p.add_argument("--series-title")
+    p.add_argument("--evidence-url", help="Agent 已核实节目归属的官方来源链接；命令不代替核实")
+    p.add_argument("--unclassified", action="store_true", help="无法确认归属时明确保留未分类")
+    p.add_argument("--catalog", type=Path)
     p = sub.add_parser("batch", help="按字符预算读取完整段落，默认跳过已校对段落")
     p.add_argument("episode", type=Path)
     p.add_argument("--max-chars", type=int, default=6000, help="完整紧凑 JSON 的字符上限，默认 6000")
@@ -203,6 +221,7 @@ def run(args):
         with destination_lock(args.output):
             if _resume_default(args, target["identity"], default_output=default_output):
                 return 0
+            args.resolved_series = _requested_series(args)
             metadata = inspect_source(target["url"], **source_options)
             resolved_video_target(target["url"], metadata)
             metadata["id"] = target["id"]
@@ -241,6 +260,7 @@ def run(args):
         with destination_lock(args.output):
             if _resume_default(args, target["identity"], default_output=default_output):
                 return 0
+            args.resolved_series = _requested_series(args)
             audio_metadata = {}
             if args.command == "transcribe":
                 from .transcribe import transcribe_audio
@@ -258,6 +278,47 @@ def run(args):
     elif args.command == "status":
         from .editing import compact_json, editing_status
         print(compact_json(editing_status(load_episode(args.episode))), end="")
+    elif args.command == "series-list":
+        from .series import load_catalog
+        print(json.dumps(load_catalog(args.catalog), ensure_ascii=False, indent=2))
+    elif args.command == "classify":
+        from .defaults import destination_lock
+        from .series import UNCATEGORIZED, load_catalog, resolve_series, validate_evidence_url
+        if args.unclassified:
+            if args.series_id is not None or args.series_title is not None or args.evidence_url is not None:
+                raise ContentError("--unclassified 不能同时指定系列或来源")
+            series = deepcopy(UNCATEGORIZED)
+        else:
+            if not args.series_id and not args.series_title:
+                raise ContentError("请提供已核实的 --series-id/--series-title，或使用 --unclassified")
+            if not args.evidence_url:
+                raise ContentError("分类需要 --evidence-url 记录已核实的节目归属来源")
+            validate_evidence_url(args.evidence_url)
+            series = resolve_series(series_id=args.series_id, series_title=args.series_title,
+                                    catalog=load_catalog(args.catalog))
+        with destination_lock(args.episode):
+            before = load_episode(args.episode)
+            after = deepcopy(before)
+            after["series"] = series
+            # A dedicated, recognizable reference keeps classification evidence
+            # separate from source/person references, and is safe to replace.
+            prefix = "系列归属："
+            after["references"] = [ref for ref in before.get("references", [])
+                                   if not ref.get("title", "").startswith(prefix)]
+            if not args.unclassified:
+                after["references"].append({"title": prefix + series["title"], "url": args.evidence_url})
+            changed = (after["series"] != before["series"]
+                       or after["references"] != before.get("references", []))
+            if changed:
+                after["revision"] = before.get("revision", 1) + 1
+                after["updated_at"] = utc_now()
+                after["artifacts"] = {}
+                validate_episode(after)
+                _save_revision(args.episode, before, after)
+            print(json.dumps({"episode": before["id"], "series": series, "changed": changed,
+                              "revision": after.get("revision", 1),
+                              "message": "系列归属已保存；正文和完成方式保持不变，已生成的导出或投稿文件需重新生成。"
+                              if changed else "系列归属未变化，保留已有文件。"}, ensure_ascii=False, indent=2))
     elif args.command == "batch":
         from .editing import compact_json, read_batch
         batch = read_batch(load_episode(args.episode), max_chars=args.max_chars, after=args.after,

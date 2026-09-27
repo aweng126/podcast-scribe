@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from podcast_scribe.public_site import build_public_site, loads_record, validate_record
+from podcast_scribe.public_site import build_public_site, load_series_overrides, loads_record, validate_record
 from podcast_scribe.share import submission_digest
 
 
@@ -457,3 +457,189 @@ def test_corrupt_existing_manifest_fails_without_orphaning_withdrawn_pages(tmp_p
     with pytest.raises(ValueError, match='manifest'):
         build_public_site([], tmp_path)
     assert before == {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob('*') if path.is_file()}
+
+
+def series_catalog():
+    return {"schema_version": 1, "series": [{
+        "id": "confirmed-series", "title": "确认的访谈系列", "description": "维护者确认的节目介绍",
+        "aliases": ["节目简称"], "sources": [{"title": "官方节目页", "url": "https://example.com/show"}],
+    }]}
+
+
+def series_overrides(issue="1"):
+    return {"schema_version": 1, "issues": {issue: {
+        "series_id": "confirmed-series", "evidence_url": "https://example.com/show/episode",
+    }}}
+
+
+def test_maintainer_series_override_is_consistent_without_changing_frozen_submission(tmp_path):
+    source = record()
+    before = deepcopy(source)
+    catalog, overrides = series_catalog(), series_overrides()
+    result = build_public_site([source], tmp_path, series_catalog=catalog, series_overrides=overrides)
+    listing = metadata(result)["episodes"][0]
+    expected = {key: catalog["series"][0][key] for key in ("id", "title", "description")}
+    assert listing["series"] == expected
+    public = json.loads((tmp_path / listing["data_url"]).read_text())
+    assert public["series"] == expected
+    assert public["provenance"] == before["provenance"]
+    assert public["references"][-1] == {
+        "title": "节目系列来源（维护者确认）",
+        "url": overrides["issues"]["1"]["evidence_url"],
+    }
+    markdown = (tmp_path / public["downloads"]["markdown"]).read_text()
+    assert "确认的访谈系列" in markdown and "访谈节目" not in markdown
+    assert "节目系列来源（维护者确认）" in markdown and "https://example.com/show/episode" in markdown
+    search = json.loads((tmp_path / "search-index.json").read_text())["episodes"][0]["text"]
+    assert "确认的访谈系列" in search and "访谈节目" not in search
+    assert json.loads((tmp_path / "series-catalog.json").read_text()) == catalog
+    assert source == before and validate_record(source) == before
+    snapshots = client(result, [{"type": "resolve", "url": listing["data_url"]},
+                                {"type": "route", "hash": "#/series/confirmed-series"}],
+                       hash="#/episode/episode-one")
+    assert '#/series/confirmed-series' in snapshots[1]["html"]
+    assert '#/series/series"' not in snapshots[1]["html"]
+    assert "确认的访谈系列" in snapshots[-1]["html"]
+
+
+def test_paged_override_and_download_use_the_same_series_and_evidence(tmp_path, monkeypatch):
+    source = paged_record(monkeypatch)
+    original = deepcopy(source)
+    result = build_public_site([source], tmp_path, series_catalog=series_catalog(), series_overrides=series_overrides())
+    listing = metadata(result)["episodes"][0]
+    public = json.loads((tmp_path / listing["data_url"]).read_text())
+    assert public["series"]["id"] == listing["series"]["id"] == "confirmed-series"
+    assert public["provenance"]["payload_sha256"] == original["provenance"]["payload_sha256"]
+    snapshots = client(result, [
+        {"type": "resolve", "url": listing["data_url"]},
+        {"type": "resolve", "url": public["pages"][0]["url"]},
+        {"type": "click", "selector": "[data-download-full]"},
+        *({"type": "resolve", "url": page["url"]} for page in public["pages"]),
+    ], hash="#/episode/episode-one")
+    markdown = snapshots[-1]["downloads"][0]
+    assert "确认的访谈系列" in markdown and "访谈节目" not in markdown
+    assert "节目系列来源（维护者确认）" in markdown and "https://example.com/show/episode" in markdown
+    assert source == original
+
+
+def test_known_series_uses_current_canonical_metadata_and_unknown_uses_neutral_label(tmp_path):
+    known = record()
+    known["submission"]["episode"]["series"].update(id="confirmed-series", title="旧名称")
+    known["provenance"]["payload_sha256"] = submission_digest(known["submission"])
+    unknown = record("unknown", 2)
+    unknown["submission"]["episode"]["series"].update(id="inbox", title="待归类", description="")
+    unknown["provenance"]["payload_sha256"] = submission_digest(unknown["submission"])
+    catalog = series_catalog()
+    catalog["series"][0]["aliases"].append("旧名称")
+    result = build_public_site([known, unknown], tmp_path, series_catalog=catalog)
+    listings = {item["id"]: item for item in metadata(result)["episodes"]}
+    assert listings["episode-one"]["series"]["title"] == "确认的访谈系列"
+    assert listings["unknown"]["series"]["title"] == "未分类"
+    assert known["submission"]["episode"]["series"]["title"] == "旧名称"
+    assert unknown["submission"]["episode"]["series"]["title"] == "待归类"
+
+
+def test_catalog_id_collision_requires_an_explicit_maintainer_decision(tmp_path):
+    source = record()
+    source["submission"]["episode"]["series"].update(id="confirmed-series", title="另一个同 ID 节目")
+    source["provenance"]["payload_sha256"] = submission_digest(source["submission"])
+    before = deepcopy(source)
+    with pytest.raises(ValueError, match="title does not"):
+        build_public_site([source], tmp_path / "site", series_catalog=series_catalog())
+    assert not (tmp_path / "site").exists()
+    result = build_public_site([source], tmp_path / "site", series_catalog=series_catalog(),
+                               series_overrides=series_overrides())
+    assert metadata(result)["episodes"][0]["series"]["title"] == "确认的访谈系列"
+    assert source == before
+
+
+def test_maintainer_can_retract_a_wrong_series_to_unclassified(tmp_path):
+    source = record()
+    original = deepcopy(source)
+    overrides = series_overrides()
+    overrides["issues"]["1"]["series_id"] = "inbox"
+    result = build_public_site([source], tmp_path, series_catalog=series_catalog(), series_overrides=overrides)
+    listing = metadata(result)["episodes"][0]
+    assert listing["series"] == {"id": "inbox", "title": "未分类", "description": ""}
+    public = json.loads((tmp_path / listing["data_url"]).read_text())
+    markdown = (tmp_path / public["downloads"]["markdown"]).read_text()
+    assert "未分类" in markdown and "访谈节目" not in markdown
+    assert public["provenance"] == original["provenance"] and source == original
+
+
+def test_catalog_is_published_without_episodes_and_stale_issue_override_does_not_block_withdrawal(tmp_path):
+    result = build_public_site([], tmp_path, series_catalog=series_catalog(), series_overrides=series_overrides("123"))
+    assert metadata(result)["episodes"] == []
+    assert json.loads((tmp_path / "series-catalog.json").read_text()) == series_catalog()
+
+
+def test_conflicting_series_ids_require_an_override_instead_of_merging_unrelated_routes(tmp_path):
+    first, second = record(), record("second", 2)
+    second["submission"]["episode"]["series"]["title"] = "另一个系列"
+    second["provenance"]["payload_sha256"] = submission_digest(second["submission"])
+    with pytest.raises(ValueError, match="conflicting titles"):
+        build_public_site([first, second], tmp_path / "site")
+    assert not (tmp_path / "site").exists()
+    result = build_public_site([first, second], tmp_path / "site", series_catalog=series_catalog(),
+                               series_overrides=series_overrides("2"))
+    assert {item["series"]["id"] for item in metadata(result)["episodes"]} == {"series", "confirmed-series"}
+
+
+@pytest.mark.parametrize("invalid", [
+    {}, {"schema_version": True, "issues": {}}, {"schema_version": 1, "issues": [], "extra": 1},
+    {"schema_version": 1, "issues": {"0": {"series_id": "confirmed-series", "evidence_url": "https://example.com"}}},
+    {"schema_version": 1, "issues": {"01": {"series_id": "confirmed-series", "evidence_url": "https://example.com"}}},
+    {"schema_version": 1, "issues": {"1": {"series_id": "unknown", "evidence_url": "https://example.com"}}},
+    {"schema_version": 1, "issues": {"1": {"series_id": "confirmed-series"}}},
+    {"schema_version": 1, "issues": {"1": {"series_id": "confirmed-series", "evidence_url": "https://example.com", "title": "other"}}},
+    *({"schema_version": 1, "issues": {"1": {"series_id": "confirmed-series", "evidence_url": url}}}
+      for url in [None, "javascript:alert(1)", "file:///private/local", "https://user:secret@example.com", "https://example.com:notaport"]),
+])
+def test_invalid_series_override_cannot_change_existing_site(tmp_path, invalid):
+    build_public_site([record()], tmp_path)
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    with pytest.raises(ValueError):
+        build_public_site([record()], tmp_path, series_catalog=series_catalog(), series_overrides=invalid)
+    assert before == {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+
+def test_override_loader_and_catalog_output_have_path_and_size_checks(tmp_path, monkeypatch):
+    path = tmp_path / "overrides.json"
+    path.write_text(json.dumps(series_overrides()))
+    assert load_series_overrides(path) == series_overrides()
+    path.write_text('{"schema_version":1,"schema_version":1,"issues":{}}')
+    with pytest.raises(ValueError, match="JSON"):
+        load_series_overrides(path)
+    path.write_text('{"schema_version":1,"issues":{"1":NaN}}')
+    with pytest.raises(ValueError, match="JSON"):
+        load_series_overrides(path)
+    monkeypatch.setattr("podcast_scribe.public_site.MAX_SERIES_OVERRIDES_BYTES", 10)
+    with pytest.raises(ValueError, match="1 MiB"):
+        load_series_overrides(path)
+    output = tmp_path / "site"
+    output.mkdir()
+    (output / "series-catalog.json").symlink_to(path)
+    with pytest.raises(ValueError, match="symlink"):
+        build_public_site([], output)
+    assert not (output / "index.html").exists()
+
+
+def test_public_build_script_reads_default_and_custom_series_overrides(tmp_path, monkeypatch):
+    builder = builder_module()
+    content = tmp_path / "content"
+    episodes = content / "episodes"
+    episodes.mkdir(parents=True)
+    (episodes / "issue-1.json").write_text(json.dumps(record()))
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(series_catalog()))
+    default_overrides = content / "series-overrides.json"
+    default_overrides.write_text(json.dumps(series_overrides()))
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    output = tmp_path / "out"
+    assert builder.main(["--output-dir", str(output), "--series-catalog", str(catalog_file)]) == 0
+    assert metadata(output / "index.html")["episodes"][0]["series"]["id"] == "confirmed-series"
+    alternate = tmp_path / "other-overrides.json"
+    alternate.write_text('{"schema_version":1,"issues":{}}')
+    assert builder.main(["--output-dir", str(output), "--series-catalog", str(catalog_file),
+                         "--series-overrides", str(alternate)]) == 0
+    assert metadata(output / "index.html")["episodes"][0]["series"]["id"] == "series"

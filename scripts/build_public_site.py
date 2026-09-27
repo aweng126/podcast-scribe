@@ -11,7 +11,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills" / "podcast-scribe"))
 
-from podcast_scribe.public_site import build_public_site  # noqa: E402
+from podcast_scribe.public_site import build_public_site, load_series_overrides  # noqa: E402
+from podcast_scribe.series import load_catalog  # noqa: E402
 from podcast_scribe.share import MAX_SUBMISSION_BYTES  # noqa: E402
 from podcast_scribe.public_storage import load_stored_record  # noqa: E402
 
@@ -50,9 +51,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--content-dir", type=Path, default=ROOT / "content" / "episodes")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "output" / "site")
+    parser.add_argument("--series-catalog", type=Path, help="Optional maintained series catalog JSON")
+    parser.add_argument("--series-overrides", type=Path, default=ROOT / "content" / "series-overrides.json")
     args = parser.parse_args(argv)
     try:
-        target = build_public_site(load_records(args.content_dir), args.output_dir)
+        target = build_public_site(load_records(args.content_dir), args.output_dir,
+                                   series_catalog=load_catalog(args.series_catalog),
+                                   series_overrides=load_series_overrides(args.series_overrides))
     except (OSError, ValueError) as error:
         print(f"Public site build failed: {error}", file=sys.stderr)
         return 2

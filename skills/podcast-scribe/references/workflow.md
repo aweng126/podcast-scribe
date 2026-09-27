@@ -42,7 +42,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" setup
 
 `setup` 复用已满足依赖的 Python 环境，或在 Skill 目录创建 `.venv` 并安装依赖。主动设置了 `PODCAST_SCRIBE_PYTHON` 时，仅向该解释器所属的有效虚拟环境安装；不向全局 Python 安装。没有 Python 3.10+ 时需要先提供可用的 Python；`setup` 不生成密钥，也不授予远端访问权限。
 
-始终从**任务工作区**执行，不要切换到 Skill 安装目录。默认文稿为 `data/<id>/episode.json`，导出为 `output/<id>/`，音频缓存为 `data/cache/`；相对路径均基于任务工作区。未知系列为 `inbox` / “待归类”。更新 Skill 可能替换安装目录，文稿和缓存应留在任务工作区；更新后由 Agent 重新检查环境。
+始终从**任务工作区**执行，不要切换到 Skill 安装目录。默认文稿为 `data/<id>/episode.json`，导出为 `output/<id>/`，音频缓存为 `data/cache/`；相对路径均基于任务工作区。系列由 Agent 按 [系列归属](series.md) 核实，无法确定时为 `inbox` / “未分类”。更新 Skill 可能替换安装目录，文稿和缓存应留在任务工作区；更新后由 Agent 重新检查环境。
 
 ## 按需自检
 
@@ -84,7 +84,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" transcribe '/path/to/episode.mp4'
 bash "$PS_SKILL_ROOT/scripts/run.sh" import '/path/to/transcript.json'
 ```
 
-这些命令默认使用自动模式，自动推导 ID、标题和输出路径，输出实际保存或复用的单集 JSON 路径。用户选择精准模式时传 `--review-mode precise`；复用已有稿件时以记录中的实际模式为准，需要切换则通过 `edit` 更新 `review.mode`。`ingest` 内部检查来源；需要单独查看元数据时才用 `inspect`。用户明确指定时才传 `--output`、`--id`、`--title`、`--series-id` 或 `--series-title` 等受支持参数。已有稿件保留人工修改；需要另存一份草稿时指定新的输出路径，转写仍可复用缓存。
+这些命令默认使用自动模式，自动推导 ID、标题和输出路径，输出实际保存或复用的单集 JSON 路径。用户选择精准模式时传 `--review-mode precise`；复用已有稿件时以记录中的实际模式为准，需要切换则通过 `edit` 更新 `review.mode`。`ingest` 内部检查来源；需要单独查看元数据时才用 `inspect`。用户明确指定时才传 `--output`、`--id`、`--title` 等参数；节目系列由 Agent 核实后通过系列参数或 `classify` 保存。已有稿件保留人工修改；需要另存一份草稿时指定新的输出路径，转写仍可复用缓存。
 
 `ingest/transcribe` 将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。长音频自动转换、分片、逐片检查上传大小并保存成功缓存；中断后复用成功片段。跨片人物对应仍须校对，详见 [长音视频](long-audio.md)。不要把缓存复用当作校对完成。
 

@@ -20,6 +20,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "podcast-scribe"))
 
 from podcast_scribe.model import ContentError
+from podcast_scribe.exporters import _md
+from podcast_scribe.series import display_series, load_catalog
 from podcast_scribe.share import MAX_SUBMISSION_BYTES, loads_submission, submission_digest
 from podcast_scribe.public_site import validate_record
 from podcast_scribe.public_storage import (PART_BYTES, load_stored_record,
@@ -195,8 +197,20 @@ class GitHub:
 
 def pull_body(record: dict) -> str:
     provenance = record["provenance"]
+    submitted_series = record["submission"]["episode"]["series"]
+    series = display_series(submitted_series)
+    known = any(item["id"] == series["id"] for item in load_catalog()["series"])
+    classification = ("系列尚未确定，可先保留未分类。" if series["id"] == "inbox" else
+                      "系列尚未进入维护目录，请核对节目归属并决定是否新增或复用已有系列。" if not known else
+                      "请确认本期确实属于该系列。")
+    # Submitted names are plain text, not mentions, images or Issue directives.
+    series_title = _md(submitted_series["title"]).replace("@", "&#64;")
+    series_id = _md(submitted_series["id"])
     return (f"{PR_MARKER}\n\n收录来自 {provenance['issue_url']} 的固定投稿。\n\n"
             f"内容 SHA-256：`{provenance['payload_sha256']}`\n\n"
+            f"投稿系列：{series_title}（ID：{series_id}）。{classification}\n\n"
+            "分类修正请遵循[系列归属维护](https://github.com/aweng126/podcast-scribe/blob/main/docs/community.md#系列归属维护)，"
+            "使用维护目录与 Issue 分类映射，不改动固定投稿或摘要。\n\n"
             "请核对来源、正文、署名与公开分享确认。此 PR 只新增公开投稿数据（大稿包含校验清单与分片）；Issue 后续编辑不会改变此快照。"
             "如机器人创建的 PR 检查显示等待批准，请先批准运行检查，再人工合并。合并后 Pages 自动更新。\n\n"
             f"合并且 Pages 部署成功后可阅读：{reader_url(record)}\n\n"
