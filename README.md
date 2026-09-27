@@ -4,6 +4,8 @@
 
 [社区阅读站](https://aweng126.github.io/podcast-scribe/)
 
+[![听稿社区阅读站首页](docs/images/community-reader.jpg)](https://aweng126.github.io/podcast-scribe/)
+
 ## 安装
 
 适用于 macOS / Linux 上可执行本地脚本的 Codex CLI / IDE。需要 Node.js/npm 和 Python 3.10+，在任务工作区执行：
