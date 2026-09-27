@@ -218,11 +218,17 @@ def test_ingest_shares_one_lazy_auth_and_existing_draft_does_not_load_it(tmp_pat
         return path
     monkeypatch.setattr(sources, "inspect_source", inspect)
     monkeypatch.setattr(sources, "fetch_audio", fetch)
+    def subtitles(url, work, *, auth):
+        auths.append(auth)
+        with sources._ydl() as ydl:
+            auth.attach(ydl)
+        return {"schema_version": 1, "status": "no_subtitles", "source": {"kind": "bilibili"}, "cues": []}
+    monkeypatch.setattr(sources, "fetch_subtitles", subtitles)
     monkeypatch.setattr(transcribe, "transcribe_audio", lambda *args, **kwargs: normalize_segments([
         {"start": 0, "end": 1, "text": "模拟正文", "speaker": "A"}]))
     assert main(["ingest", URL, "--cookies-from-browser", "chrome:Profile 1"]) == 0
     capsys.readouterr()
-    assert auths[0] is auths[1] and len(loads) == 1
+    assert len(auths) == 3 and all(auth is auths[0] for auth in auths) and len(loads) == 1
     content = Path("data", BV, "episode.json").read_text()
     assert "synthetic-cookie-secret" not in content and "Profile 1" not in content
     monkeypatch.setattr(SourceAuth, "attach", lambda *args: pytest.fail("existing draft must not read cookies"))

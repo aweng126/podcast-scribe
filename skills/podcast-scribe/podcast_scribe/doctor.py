@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 
-CAPABILITIES = ("import", "markdown", "site", "pdf", "transcribe", "ingest", "inspect")
+CAPABILITIES = ("import", "markdown", "site", "pdf", "transcribe", "ingest", "inspect", "subtitle-source", "ocr")
 FFMPEG_TIMEOUT_SECONDS = 5
 
 
@@ -90,6 +90,22 @@ def _pdf() -> list[dict]:
     return []
 
 
+def _ocr() -> list[dict]:
+    from .model import ContentError
+    from .subtitle_ocr import check_tesseract
+
+    issues = _ffmpeg()
+    try:
+        check_tesseract("chi_sim+eng")
+    except ContentError as exc:
+        issues.append(_issue("ocr_unavailable", str(exc),
+                             "安装 Tesseract 及 chi_sim、eng 语言包；本地字幕文件对照不需要 OCR。"))
+    except Exception:
+        issues.append(_issue("ocr_unavailable", "无法检查本地 OCR 依赖。",
+                             "检查 Tesseract 安装及语言包配置后重试。"))
+    return issues
+
+
 def check_environment(required=None) -> dict:
     """Report only requested capabilities; cloud readiness is local-only."""
     required = list(dict.fromkeys(CAPABILITIES if required is None else required))
@@ -103,6 +119,8 @@ def check_environment(required=None) -> dict:
         issues = []
         if capability == "pdf":
             issues = _pdf()
+        if capability == "ocr":
+            issues = _ocr()
         if capability in {"transcribe", "ingest"}:
             if transcribe_issues is None:
                 _, transcribe_issues = _dependency("openai", "openai")
@@ -113,7 +131,7 @@ def check_environment(required=None) -> dict:
                     ))
                 transcribe_issues.extend(_ffmpeg())
             issues = list(transcribe_issues)
-        if capability in {"inspect", "ingest"}:
+        if capability in {"inspect", "ingest", "subtitle-source"}:
             if inspect_issues is None:
                 _, inspect_issues = _dependency("yt_dlp", "yt-dlp")
             issues = issues + inspect_issues

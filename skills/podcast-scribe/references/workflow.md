@@ -60,6 +60,8 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require import markdown pdf
 | `import` / `markdown` / `site` | Python 标准库；无需 API、字体或第三方包。 |
 | `pdf` | `reportlab` 与可嵌入的中文 TrueType 字体。 |
 | `inspect` | `yt-dlp`；自检不访问 B站。 |
+| `subtitle-source` | `yt-dlp`；本地字幕文件对照只需 Python 标准库。 |
+| `ocr` | Tesseract、`chi_sim`/`eng` 语言包及 ffmpeg；按需检查。 |
 | `transcribe` | `openai` SDK、`OPENAI_API_KEY` 与可执行的 ffmpeg。 |
 | `ingest` | `transcribe` 的条件与 `yt-dlp`。 |
 
@@ -88,7 +90,9 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" import '/path/to/transcript.json'
 
 B站普通网页提取失败时，程序尝试正常公开元数据与播放 API，并核验指定分 P、权限、预览标记和时长。仍被拒绝时按下节处理，不能将简介冒充对话全文。
 
-`ingest`、`transcribe`、`import` 只生成未经整理的草稿。获取或复用文稿后，继续执行：
+`ingest` 会先采集可用字幕，转写后生成独立对照报告；无轨或字幕失败不阻断音频流程。已有稿件、本地字幕与画面字幕 OCR 见 [字幕辅助核验](subtitles.md)。报告只用于辅助核验，不自动修改正文或校对状态。
+
+`ingest`、`transcribe`、`import` 生成的文稿仍是未经整理的草稿。获取或复用文稿后，继续执行：
 
 ```sh
 bash "$PS_SKILL_ROOT/scripts/run.sh" status data/my-episode/episode.json

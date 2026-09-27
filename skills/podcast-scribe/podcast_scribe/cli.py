@@ -111,6 +111,29 @@ def parser():
     p.add_argument("--context-chars", type=int, default=300, help="前后各最多保留的上下文字符数，默认 300")
     p.add_argument("--raw", action="store_true", help="按需读取原始转写，替代当前正文视图")
     p.add_argument("--output", type=Path, help="另存同一紧凑 JSON，供 edit --batch 校验")
+    p = sub.add_parser("check-subtitles", help="提取字幕并与现稿对照；不修改正文或校对状态")
+    p.add_argument("episode", type=Path)
+    source = p.add_mutually_exclusive_group()
+    source.add_argument("--file", type=Path, help="本地 JSON/SRT/VTT 字幕；省略时检查 B站字幕轨")
+    source.add_argument("--video", type=Path, help="本地视频画面字幕 OCR")
+    source.add_argument("--ocr", action="store_true", help="下载所选 B站视频画面并进行本地 OCR")
+    p.add_argument("--cache", type=Path, default=Path("data/cache"))
+    p.add_argument("--output-dir", type=Path, help="默认 output/<id>/subtitles/；旧报告保留")
+    p.add_argument("--refresh", action="store_true", help="重新采集字幕或识别画面，不清除原文稿")
+    p.add_argument("--offset", type=float, default=0, help="字幕时间加此秒数后再对齐")
+    p.add_argument("--start", type=float, default=0, help="OCR 起点秒数；默认完整视频")
+    p.add_argument("--end", type=float, help="OCR 终点秒数；先识别短片检查字幕区域")
+    p.add_argument("--interval", type=float, default=0.5, help="OCR 抽帧间隔秒数")
+    p.add_argument("--region", type=float, nargs=4, default=(0.05, 0.65, 0.9, 0.3),
+                   metavar=("X", "Y", "WIDTH", "HEIGHT"), help="OCR 字幕区域，0–1 归一化坐标")
+    p.add_argument("--ocr-language", default="chi_sim+eng")
+    _cookie_options(p)
+    p = sub.add_parser("subtitle-batch", help="按字符预算读取字幕差异；拒绝与现稿不一致的报告")
+    p.add_argument("episode", type=Path)
+    p.add_argument("--report", type=Path, required=True)
+    p.add_argument("--after", type=int, default=0, help="从此差异组序号之后继续")
+    p.add_argument("--max-chars", type=int, default=6000)
+    p.add_argument("--output", type=Path)
     p = sub.add_parser("export", help="从单集 JSON 导出文稿")
     p.add_argument("episode", type=Path)
     p.add_argument("--formats", nargs="+", choices=["markdown", "pdf"], default=["markdown", "pdf"])
@@ -147,7 +170,7 @@ def run(args):
         print(json.dumps(metadata, ensure_ascii=False, indent=2))
     elif args.command == "ingest":
         from .defaults import destination_lock, resolved_video_target, video_target
-        from .sources import fetch_audio, inspect_source
+        from .sources import fetch_audio, fetch_subtitles, inspect_source
         from .transcribe import transcribe_audio
         default_output = args.output is None
         if not default_output:
@@ -168,6 +191,14 @@ def run(args):
             metadata["input_identity"] = target["identity"]
             work = args.cache / target["id"]
             write_json(work / "metadata.json", metadata)
+            # Subtitle evidence is optional, and remains separate from the ASR
+            # source and review states. Query once before the paid audio step.
+            try:
+                subtitle_document = fetch_subtitles(target["url"], work, **source_options)
+            except ContentError as exc:
+                subtitle_document = {"schema_version": 1, "status": "unavailable", "cues": [],
+                                     "source": {"kind": "bilibili", "url": target["url"]},
+                                     "reason": str(exc)}
             audio = fetch_audio(target["url"], work, **source_options)
             audio_metadata = {}
             segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language,
@@ -175,6 +206,12 @@ def run(args):
             metadata["duration_seconds"] = max(metadata.get("duration_seconds") or 0,
                                                audio_metadata.get("duration_seconds") or 0)
             _save_new(args, metadata, segments, speakers)
+            from .subtitle_review import write_subtitle_report
+            try:
+                result = write_subtitle_report(load_episode(args.output), subtitle_document)
+                print(json.dumps({"subtitle_check": result}, ensure_ascii=False), file=sys.stderr)
+            except ContentError as exc:
+                print(f"字幕对照未完成，已保留转写稿：{exc}", file=sys.stderr)
     elif args.command in ("transcribe", "import"):
         from .defaults import destination_lock, local_target
         default_output = args.output is None
@@ -207,6 +244,27 @@ def run(args):
         batch = read_batch(load_episode(args.episode), max_chars=args.max_chars, after=args.after,
                            include_reviewed=args.include_reviewed, context_chars=args.context_chars, raw=args.raw)
         content = compact_json(batch)
+        if args.output:
+            _new_destination(args.output)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("x", encoding="utf-8") as stream:
+                stream.write(content)
+        print(content, end="")
+    elif args.command == "check-subtitles":
+        from .subtitle_review import check_episode_subtitles
+        result = check_episode_subtitles(args.episode, subtitle_file=args.file, video=args.video,
+                    ocr=args.ocr, cache=args.cache, output_dir=args.output_dir,
+                    refresh=args.refresh, offset=args.offset, start=args.start, end=args.end,
+                    interval=args.interval, region=args.region, language=args.ocr_language,
+                    **_source_options(args))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] in {"available", "no_subtitles"} else 2
+    elif args.command == "subtitle-batch":
+        from .editing import compact_json
+        from .subtitle_review import read_difference_batch
+        result = read_difference_batch(load_episode(args.episode), _read(args.report),
+                                       after=args.after, max_chars=args.max_chars)
+        content = compact_json(result)
         if args.output:
             _new_destination(args.output)
             args.output.parent.mkdir(parents=True, exist_ok=True)

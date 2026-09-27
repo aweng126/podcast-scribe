@@ -107,6 +107,7 @@ def test_all_capabilities_ready_uses_local_checks_only(isolated_environment, mon
     monkeypatch.setattr(doctor.importlib, "import_module", lambda name: module)
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-secret")
     monkeypatch.setattr(exporters, "_pdf_font", lambda: "MockChineseFont")
+    monkeypatch.setattr(doctor, "_ocr", lambda: [])
     monkeypatch.setattr(doctor.shutil, "which", lambda name: "/fake/ffmpeg")
     calls = []
 

@@ -8,6 +8,7 @@
 
 - 支持 Bilibili 单集链接、本地音视频及 JSON/SRT/VTT 转写；长音视频自动分片，支持缓存续跑。
 - 按批整理完整文稿，只读取所需文本、提交增量修改，保留原始转写与编辑历史。
+- 利用已有字幕做本地对照，输出差异与缺失清单；画面字幕可通过本地 OCR 提取，不自动标为已校对。
 - 导出本地 Markdown 与中文 PDF，可选生成离线阅读页面。
 - 完成后邀请分享，用户同意后准备投稿材料，审核后收录到公共阅读站。
 
@@ -27,6 +28,7 @@ Skill 安装到当前项目的 `.agents/skills/podcast-scribe/`。首次运行�
 
 - **音视频转写**：需要在运行环境中配置 `OPENAI_API_KEY`，音频会发送到 OpenAI API，并产生接口费用。导入已有转写无需 API。
 - **中文 PDF**：需要可嵌入的中文 TrueType 字体，可通过 `PODCAST_SCRIBE_FONT` 指定字体路径。
+- **画面字幕 OCR**：需要 Tesseract 及简体中文、英文语言包；已有字幕文件对照无需这些依赖。
 
 ## 使用
 
@@ -49,6 +51,8 @@ Skill 安装到当前项目的 `.agents/skills/podcast-scribe/`。首次运行�
 四小时等长节目使用相同入口，失败后可复用成功分片继续处理；跨片说话人对应仍须校对。机制与限制见[长音视频](skills/podcast-scribe/references/long-audio.md)，减少上下文开销的流程见[分批整理](skills/podcast-scribe/references/editing.md)。
 
 B站访问受限时，可先在浏览器正常登录，再授权使用该浏览器的登录态重试，具体见[访问受限时的处理](skills/podcast-scribe/references/workflow.md#b站访问受限时)。
+
+新 B站任务自动尝试字幕辅助核验；已有稿件可直接说“用字幕辅助校对这篇文稿”。Agent 处理字幕采集、画面识别和分批差异检查，流程见[字幕辅助核验](skills/podcast-scribe/references/subtitles.md)。
 
 ## 分享（可选）
 

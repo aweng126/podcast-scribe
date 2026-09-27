@@ -52,6 +52,8 @@ def offline_video(monkeypatch, workspace):
 
     monkeypatch.setattr(sources, "inspect_source", inspect)
     monkeypatch.setattr(sources, "fetch_audio", fetch)
+    monkeypatch.setattr(sources, "fetch_subtitles", lambda *args, **kwargs: {
+        "schema_version": 1, "status": "no_subtitles", "source": {"kind": "bilibili"}, "cues": []})
     monkeypatch.setattr(transcribe, "transcribe_audio", transcribe_audio)
     return calls
 
