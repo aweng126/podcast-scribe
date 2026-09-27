@@ -196,9 +196,8 @@ def render_markdown(episode: dict) -> str:
             (f'<a id="segment-{segment["index"] + 1}"></a>' if offset else "") + _md(part)
             for offset, (segment, part) in enumerate(zip(turn["segments"], segment_text_parts(turn["segments"])))
         )
-        pending = " · 待核对" if turn["needs_review"] else ""
         lines.extend([
-            f"**{timestamp} · {_md(_speaker_label(turn, speakers))}{pending}**",
+            f"**{timestamp} · {_md(_speaker_label(turn, speakers))}**",
             "",
             content if turn["text"] else "[此段暂无文字]",
             "",
@@ -408,8 +407,7 @@ def _render_pdf(episode: dict, path: Path, font: str) -> None:
         for chapter, target in targets:
             if target == index:
                 add(chapter.get("title"), "h3")
-        pending = " · 待核对" if turn["needs_review"] else ""
-        label = _xml(f"{_timestamp(turn['start'])} · {_speaker_label(turn, speakers)}{pending}")
+        label = _xml(f"{_timestamp(turn['start'])} · {_speaker_label(turn, speakers)}")
         url = _video_url(episode, turn["start"])
         if url:
             label = f'<link href="{_xml(url)}" color="#276F72">{label}</link>'

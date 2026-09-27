@@ -97,7 +97,7 @@ def test_pdf_chinese_long_speech_and_literal_markup(episode, tmp_path):
     pypdf = pytest.importorskip("pypdf")
     episode["segments"][0]["text"] = (
         "这是虚构的长段落排版测试，数字 123 与英文 Markdown 应当正确显示。" * 190
-        + "段落末尾标记。 <b>原样保留</b> & 不解析文稿 HTML。"
+        + "段落末尾标记[词句待核对]。 <b>原样保留</b> & 不解析文稿 HTML。"
     )
     result = export_episode(episode, tmp_path, ["pdf"])
     reader = pypdf.PdfReader(result["pdf"])
@@ -105,6 +105,7 @@ def test_pdf_chinese_long_speech_and_literal_markup(episode, tmp_path):
     assert len(reader.pages) >= 3
     assert "草稿" in text
     assert "段落末尾标记" in text
+    assert "[词句待核对]" in text.replace("\n", "")
     assert "说话人待确认" in text
     assert "<b>原样保留</b>" in text.replace("\n", "")
     for index, page in enumerate(reader.pages, 1):
@@ -150,7 +151,8 @@ def test_continuous_speech_preserves_chapter_targets_without_repeated_labels(epi
     assert '遇到问题，<a id="segment-2"></a>要第一时间面对。<a id="segment-3"></a>承担后果。' in dialogue
     assert "(#segment-2)" in document
     assert "### 面对问题" not in dialogue
-    assert "待核对" in dialogue
+    assert " · 待核对" not in dialogue
+    assert "段落归属与文字仍需校对" in document
     assert "说话人待确认" in dialogue
     assert episode == original
 
@@ -161,7 +163,9 @@ def test_continuous_speech_preserves_chapter_targets_without_repeated_labels(epi
     visible = "".join(page.extract_text() for page in reader.pages).replace("\n", "")
     assert "遇到问题，要第一时间面对。承担后果。" in visible
     assert visible.count("· 说话人 A") == 1
-    assert "00:00:22 · 说话人 A · 待核对" in visible
+    assert "00:00:22 · 说话人 A" in visible
+    assert " · 待核对" not in visible
+    assert "段落归属与文字仍需校对" in visible
     assert any(annotation.get_object().get("/Dest") for page in reader.pages for annotation in page.get("/Annots", []))
     assert episode == original
 
