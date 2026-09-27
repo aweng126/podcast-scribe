@@ -28,7 +28,9 @@ def ffmpeg_binary() -> str:
 
 def _run(arguments: list[str], *, timeout: int = 3600):
     try:
-        result = subprocess.run([ffmpeg_binary(), "-nostdin", "-hide_banner", *arguments],
+        # FFmpeg otherwise returns success after skipping corrupt AAC packets,
+        # allowing a partial recording to become the upload source.
+        result = subprocess.run([ffmpeg_binary(), "-nostdin", "-hide_banner", "-xerror", *arguments],
                                 capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ContentError("音频处理未完成；请检查 ffmpeg 和本地磁盘后重试") from exc

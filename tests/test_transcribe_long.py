@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import wave
 
@@ -295,6 +296,39 @@ def test_interruption_after_response_write_does_not_repeat_billable_request(mock
     monkeypatch.setattr(module, "_add_references", original)
     run(state)
     assert len(state["calls"]) == 2
+
+
+def test_corrupt_aac_is_rejected_before_conversion_publish_or_upload(mocked_pipeline, monkeypatch, tmp_path):
+    source = tmp_path / "corrupt.aac"
+    subprocess.run([audio_chunks.ffmpeg_binary(), "-nostdin", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=44100",
+                    "-c:a", "aac", "-f", "adts", str(source)], check=True, capture_output=True)
+    data = bytearray(source.read_bytes())
+    frames, position = [], 0
+    while position < len(data):
+        assert data[position] == 0xff and data[position + 1] & 0xf6 == 0xf0
+        length = ((data[position + 3] & 3) << 11) | (data[position + 4] << 3) | (data[position + 5] >> 5)
+        frames.append((position, length))
+        position += length
+    start, length = frames[len(frames) // 2]
+    # Preserve the ADTS header and corrupt one real AAC packet mid-recording.
+    data[start + 7:start + length] = b"\xff" * (length - 7)
+    source.write_bytes(data)
+
+    destination = tmp_path / "existing.mp3"
+    destination.write_bytes(b"previous successful conversion")
+    with pytest.raises(ContentError, match="音频处理失败"):
+        audio_chunks.prepare_audio(source, destination)
+    assert destination.read_bytes() == b"previous successful conversion"
+
+    state = mocked_pipeline
+    state["source"] = source
+    monkeypatch.setattr(module, "prepare_audio", audio_chunks.prepare_audio)
+    with pytest.raises(ContentError, match="音频处理失败"):
+        run(state)
+    assert not state["calls"]
+    assert not list(state["cache"].glob("*/audio.mp3"))
+    assert not list(state["cache"].glob("*/manifest.json"))
 
 
 def test_real_ffmpeg_duration_silence_and_accurate_small_slices(tmp_path):
