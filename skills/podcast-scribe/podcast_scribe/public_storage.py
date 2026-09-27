@@ -20,15 +20,31 @@ def record_bytes(record: dict) -> bytes:
                        separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
 
 
+def _readable_bytes(record: dict, limit: int) -> bytes | None:
+    """Format small records without allocating a full indented copy of a large one."""
+    encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
+    payload = bytearray()
+    for chunk in encoder.iterencode(record):
+        encoded = chunk.encode("utf-8")
+        if len(payload) + len(encoded) + 1 > limit:
+            return None
+        payload.extend(encoded)
+    payload.append(10)
+    return bytes(payload)
+
+
 def stored_files(record: dict, number: int):
     """Yield (relative path, bytes), with the manifest last, in one atomic tree."""
+    root = f"issue-{number}.json"
+    readable = _readable_bytes(record, min(PART_BYTES, MAX_RECORD_BYTES))
+    if readable is not None:
+        yield root, readable
+        return
+    # Keep large records compact: extra nesting indentation must not reduce the
+    # submission size limit. Even a single part gets a readable manifest.
     payload = record_bytes(record)
     if len(payload) > MAX_RECORD_BYTES:
         raise ValueError("Public record is too large.")
-    root = f"issue-{number}.json"
-    if len(payload) <= PART_BYTES:
-        yield root, payload
-        return
     parts = []
     for index, offset in enumerate(range(0, len(payload), PART_BYTES)):
         chunk = payload[offset:offset + PART_BYTES]
@@ -37,7 +53,10 @@ def stored_files(record: dict, number: int):
         yield name, chunk
     manifest = {"schema_version": 2, "storage": "chunked-json", "byte_length": len(payload),
                 "sha256": hashlib.sha256(payload).hexdigest(), "parts": parts}
-    yield root, record_bytes(manifest)
+    readable_manifest = _readable_bytes(manifest, MAX_MANIFEST_BYTES)
+    if readable_manifest is None:
+        raise ValueError("Public storage manifest is too large.")
+    yield root, readable_manifest
 
 
 def storage_manifest(payload: bytes, number: int) -> dict | None:

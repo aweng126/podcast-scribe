@@ -99,6 +99,11 @@ def test_freezes_one_content_file_and_reuses_pr_without_refetch(submission):
     message = intake.freeze_submission(api, event, intake.REPOSITORY, lambda url: deepcopy(submission))
     assert "/pull/13" in message
     assert api.record["provenance"] == {"issue_url": event["issue"]["html_url"], "submitter": "contributor", "payload_sha256": submission_digest(submission)}
+    blob = next(data for method, path, data in api.calls if path == "/git/blobs")
+    stored = base64.b64decode(blob["content"]).decode("utf-8")
+    assert stored.startswith('{\n  "provenance": {\n') and stored.endswith("\n")
+    assert '\n          "text": "测试公开文稿。"\n' in stored
+    assert json.loads(stored)["submission"] == submission
     tree = next(data for method, path, data in api.calls if path == "/git/trees")
     assert tree == {"base_tree": "maintree", "tree": [{"path": "content/episodes/issue-12.json", "mode": "100644", "type": "blob", "sha": "blobsha"}]}
     assert all(method != "PATCH" for method, _, _ in api.calls)
