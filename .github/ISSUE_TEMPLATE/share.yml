@@ -5,28 +5,29 @@ body:
   - type: markdown
     attributes:
       value: |
-        使用 Podcast Scribe 的 `share` 命令生成投稿 JSON，再上传到这里。
+        将 Skill 提供的公开投稿 JSON 拖入下方“投稿 JSON”框，检查已预填的信息、补齐空项，勾选公开分享确认后提交。
+        尚未取得投稿文件时，请先告诉 Skill：“愿意分享，署名为「我的名字」”。
         Issue 和附件上传后即公开；审核只决定是否收录到公共阅读站。
         首次有效投稿将固定为一份内容 PR。修改已固定的文稿请新建 Issue。
   - type: input
     id: source_url
     attributes:
       label: 来源链接
-      description: 与投稿 JSON 中的来源链接一致。
+      description: 通常已由投稿链接填写；空白时从投稿 JSON 中复制来源链接。
     validations:
       required: true
   - type: input
     id: attribution
     attributes:
       label: 投稿署名
-      description: 与 share 命令使用的署名一致；会公开展示。
+      description: 通常已由投稿链接填写；与生成文件时的署名一致，会公开展示。
     validations:
       required: true
   - type: input
     id: content_digest
     attributes:
       label: 内容 SHA-256
-      description: share 命令输出的内容摘要，用于固定并验证投稿版本。
+      description: 通常已由投稿链接填写；空白时复制 Skill 提供的 sha256，无需自行计算。
     validations:
       required: true
   - type: textarea
