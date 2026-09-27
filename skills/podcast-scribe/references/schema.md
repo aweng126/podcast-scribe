@@ -11,7 +11,7 @@
 - `speakers: [{id, name, role}]`：当前单集内的人物映射。导入标签原样保留在可选 `source_label`，不当作已验证姓名。
 - `segments: [{id, start, end, speaker_id, raw_text, text, review_status}]`：秒级时间、匿名人物、不可变原始转写、整理稿；未知人物为 `null`，允许说话时间重叠。
 - `summary: [string]` 与 `chapters: [{id, title, start, segment_id}]`：摘要及有真实段落锚点的章节。
-- `status: draft | published`、`review: {speakers_confirmed, content_checked}`、`revision`。
+- `status: draft | published`、`review: {speakers_confirmed, content_checked, mode?, basis?}`、`revision`。
 - `references: [{title, url, note}]`：人物及原节目核验来源，仅 HTTP/HTTPS 链接，三种输出均展示。姓名可据节目资料核实；`speakers_confirmed` 仍表示段落说话人归属是否完成校对。
 - `artifacts: {markdown, pdf}`：生成路径。编辑后清空，防止页面下载过期版本。
 - 可选 `is_demo: true`：仅用于明确演示，不能发布。
@@ -35,26 +35,34 @@
 
 ## 校对状态
 
+`review.mode` 为 `auto`（默认自动模式）或 `precise`（用户选择的精准模式）。自动模式由 Agent 完成全文整理后直接交付；精准模式把仍有疑点的片段交给用户确认。新任务可传 `--review-mode precise`；已有稿件通过 `edit` 提交 `{"review":{"mode":"precise"}}` 切换，保留正文与历史，不重做 ASR。
+
 逐段 `review_status` 使用以下值：
 
 | 状态 | 含义 |
 | --- | --- |
-| `unreviewed` | 原始导入，尚未整理或核对；旧记录缺失此字段时按此状态处理。 |
-| `edited` | 已整理，尚未完成核对。 |
-| `needs_review` | 存在听不清、交叠发言、归属不明等疑点，仍待核对。 |
-| `reviewed` | 已依据来源完成该段核对。 |
+| `unreviewed` | 原始导入，尚未整理；缺失字段时同此状态。 |
+| `edited` | 已整理，尚未完成本轮收尾。 |
+| `needs_review` | 整理时发现疑点；自动模式由 Agent 按可用证据处理，精准模式保留待确认。 |
+| `reviewed` | 已按本轮完成方式处理或接受，须结合整集 `review.basis` 理解。 |
 
-旧值 `pending`、`uncertain` 仍可读取，均按未核对处理；新稿使用上表状态。其他值会被拒绝。Markdown 与 PDF 在文首说明整体校对状态，发言标题仅显示时间与说话人，不重复显示“待核对”标签；正文中具体的疑点注释照常保留。内部逐段状态及离线预览中的校对标记保持不变；润色完成不等于校对完成。
+`review.basis` 记录完成依据：
 
-实际逐段核对后，通过 `edit` 更新已核对段落，例如：
+| 值 | 含义与入口 |
+| --- | --- |
+| `automated` | 自动整理完成。全文均已整理、有有效人物标签、摘要和章节后运行 `complete`；不要求用户手动确认，不表示逐句听音。 |
+| `user_accepted` | 用户明确接受当前稿、不再处理剩余疑点。运行 `complete --basis user_accepted`，不得自行推定用户已经接受。 |
+| `source_checked` | 已依据来源逐段精校。先逐段设为 `reviewed`，再运行 `complete --basis source_checked`；未解疑点不能由此命令批量跳过。 |
 
-```json
-{"segments":[{"id":"seg-00001","review_status":"reviewed"}]}
-```
+精准模式不能以 `automated` 完成。用户在精准模式明确接受当前结果时可记录为 `user_accepted`，仍不宣称已听音。旧稿无 `mode` 时默认自动模式，无 `basis` 的既有校对记录保持兼容；不会仅因加载或导出就改动状态。
 
-所有段落均为 `reviewed` 后，才可另行设置 `{"review":{"speakers_confirmed":true,"content_checked":true}}`。该操作表示**已完成**对应校对，不能为通过发布验证而随意设置。`content_checked: true` 与尚未核对的段落不能同时保存；`speakers_confirmed: true` 时不得存在归属为 `null` 的段落。未知真名不影响确认匿名标签，无法判断谁在说话则仍保持 `null`。
+`complete` 保存历史、增加修订号、清空旧导出并确认整集人物和内容完成。自动完成拒绝含未整理原始段落的稿件，也不生成摘要、章节或修订文字；Agent 必须先完成这些工作。`content_checked=true` 仍要求全部段落为 `reviewed`，`speakers_confirmed=true` 仍要求每段有有效人物标签，匿名标签可以使用。不要只设置两项布尔值来跳过流程。
 
-旧版本若留下了“整集已校对、段落仍待核对”的矛盾记录，普通校验和导出会指出问题。可执行 `edit` 应用 `{"review":{"speakers_confirmed":false,"content_checked":false}}`，保留历史并退回草稿，再逐段核对；不要直接修改原文件或批量假定为已核对。`edit` 的兼容读取只放宽旧校对状态冲突，其他结构错误仍需处理。
+普通 `edit` 会撤销整集完成标志并保留模式及前次完成依据；正文或归属变化的段落退回 `edited`。切换到精准模式时，先前自动整理或用户接受的段落回到待精校状态，不能直接当作已听音。旧的 `basis` 在整集完成标志为 false 时不表示本轮已经完成。
+
+旧值 `pending`、`uncertain` 可读取并按未核对处理，新稿使用上表状态。Markdown/PDF 在文首说明整体完成方式，不重复显示通用校对标签。自动模式的识别疑点记在本地笔记中，阅读稿不插入手动核对清单；精准模式保留必要的具体疑点与单独清单。切换模式不会自动删除正文里的注释，需要 Agent 依据用户要求通过 `edit` 处理。
+
+旧版本若留下整集已校对但段落仍未校对的冲突，可通过 `edit` 设置两项整集标志为 false，备份并退回草稿后继续处理。兼容读取只放宽旧校对状态冲突，其他结构错误仍需修复。
 
 ## 外部转写导入
 

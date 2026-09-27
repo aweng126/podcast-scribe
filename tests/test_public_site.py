@@ -373,8 +373,17 @@ def test_large_reader_fetches_one_page_and_chapters_cross_pages(tmp_path, monkey
     assert "大稿仅搜索标题" in search[0]["html"]
 
 
-def test_large_reader_download_fetches_remaining_body_only_after_click(tmp_path, monkeypatch):
-    result = build_public_site([paged_record(monkeypatch)], tmp_path)
+@pytest.mark.parametrize("basis,label", [
+    (None, "人物与内容已校对"),
+    ("automated", "自动整理完成"),
+    ("user_accepted", "用户已确认采用当前稿"),
+])
+def test_large_reader_download_fetches_remaining_body_only_after_click(tmp_path, monkeypatch, basis, label):
+    source = paged_record(monkeypatch)
+    if basis:
+        source["submission"]["episode"]["review"].update(mode="auto", basis=basis)
+        source["provenance"]["payload_sha256"] = submission_digest(source["submission"])
+    result = build_public_site([source], tmp_path)
     url = metadata(result)["episodes"][0]["data_url"]
     pages = json.loads((tmp_path / url).read_text())["pages"]
     snapshots = client(result, [
@@ -391,6 +400,11 @@ def test_large_reader_download_fetches_remaining_body_only_after_click(tmp_path,
     markdown = snapshots[-1]["downloads"][0]
     assert all(f"第{index}页独有正文" in markdown for index in range(3))
     assert "投稿署名：测试投稿人" in markdown
+    assert markdown.count(label) == 1
+    assert snapshots[2]["html"].count(label) == 1
+    if basis:
+        assert "人物与内容已校对" not in markdown
+        assert "说话人归属校对**：已确认" not in markdown
 
 
 def test_site_total_limit_fails_before_touching_previous_output(tmp_path, monkeypatch):

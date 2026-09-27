@@ -119,6 +119,7 @@ def _public_episode(episode: dict, out_dir: Path, identifier: str) -> dict:
         "review": {"speakers_confirmed": bool(review.get("speakers_confirmed")), "content_checked": bool(review.get("content_checked"))},
         "downloads": _copy_downloads(episode, out_dir, identifier),
     }
+    public["review"].update({key: review[key] for key in ("mode", "basis") if key in review})
     # Build reading turns only after stripping private ASR fields. Keep original
     # segment positions for chapter navigation without breaking the dialogue.
     public["turns"] = [

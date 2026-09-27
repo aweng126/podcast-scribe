@@ -16,6 +16,9 @@ class ContentError(ValueError):
 
 
 REVIEW_STATUSES = frozenset({"unreviewed", "edited", "needs_review", "reviewed", "pending", "uncertain"})
+REVIEW_MODES = frozenset({"auto", "precise"})
+REVIEW_BASES = frozenset({"automated", "user_accepted", "source_checked"})
+REVIEW_FIELDS = frozenset({"speakers_confirmed", "content_checked", "mode", "basis"})
 
 
 def utc_now() -> str:
@@ -44,6 +47,11 @@ def _review_flags(ep):
     for key in ("speakers_confirmed", "content_checked"):
         if key in review and type(review[key]) is not bool:
             raise ContentError(f"review.{key} 必须是布尔值")
+    for key, choices in (("mode", REVIEW_MODES), ("basis", REVIEW_BASES)):
+        if key in review and (not isinstance(review[key], str) or review[key] not in choices):
+            raise ContentError(f"review.{key} 必须是 {'/'.join(sorted(choices))}")
+    if review.get("mode", "auto") == "precise" and review.get("basis") == "automated":
+        raise ContentError("precise 模式不能使用 automated 完成依据")
     return review
 
 
@@ -149,7 +157,8 @@ def validate_episode(ep: dict, *, for_publication: bool = False) -> dict:
     return ep
 
 
-def new_episode(metadata: dict, segments: list[dict], speakers: list[dict], *, series_id: str, series_title: str) -> dict:
+def new_episode(metadata: dict, segments: list[dict], speakers: list[dict], *, series_id: str,
+                series_title: str, review_mode: str | None = None) -> dict:
     ep = {
         "schema_version": 1, "id": safe_id(metadata["id"]), "title": metadata["title"],
         "description": metadata.get("description", ""), "source": metadata.get("source", {}),
@@ -160,6 +169,8 @@ def new_episode(metadata: dict, segments: list[dict], speakers: list[dict], *, s
         "review": {"speakers_confirmed": False, "content_checked": False},
         "created_at": utc_now(), "updated_at": utc_now(), "artifacts": {},
     }
+    if review_mode is not None:
+        ep["review"]["mode"] = review_mode
     return validate_episode(ep)
 
 
@@ -174,7 +185,7 @@ def load_episode(path: Path, *, for_edit: bool = False) -> dict:
     _review_flags(ep)
     draft = deepcopy(ep)
     draft["status"] = "draft"
-    draft["review"] = {"speakers_confirmed": False, "content_checked": False}
+    draft.setdefault("review", {}).update(speakers_confirmed=False, content_checked=False)
     validate_episode(draft)
     return ep
 
@@ -192,6 +203,38 @@ def save_episode(path: Path, ep: dict):
     write_json(path, ep)
 
 
+def complete_episode(ep: dict, *, basis: str | None = None) -> dict:
+    """Complete an organized draft without confusing automation with source review."""
+    review = _review_flags(ep)
+    mode = review.get("mode", "auto")
+    basis = basis if basis is not None else ("automated" if mode == "auto" else "source_checked")
+    _review_flags({"review": {"mode": mode, "basis": basis}})
+    result = deepcopy(ep)
+    result["status"] = "draft"
+    result.setdefault("review", {}).update(speakers_confirmed=False, content_checked=False)
+    validate_episode(result)
+    if not result.get("summary") or not result.get("chapters"):
+        raise ContentError("完成前需要有效摘要和章节")
+    if any(s.get("speaker_id") is None for s in result["segments"]):
+        raise ContentError("完成前需要为所有段落明确人物归属")
+    if basis == "automated" and any(
+        s.get("review_status") not in {"edited", "needs_review", "reviewed"}
+        for s in result["segments"]
+    ):
+        raise ContentError("自动完成前需要整理全部段落，不能直接完成原始未整理稿")
+    if basis == "source_checked" and review.get("basis") in {"automated", "user_accepted"}:
+        raise ContentError("不能将自动整理或用户接受改称 source_checked；请先用 edit 开始精校并逐段核对来源")
+    if basis == "source_checked" and any(s.get("review_status") != "reviewed" for s in result["segments"]):
+        raise ContentError("source_checked 需要此前全部段落已标记 reviewed；不能自动升格疑点")
+    for segment in result["segments"]:
+        segment["review_status"] = "reviewed"
+    result["review"].update(mode=mode, basis=basis, speakers_confirmed=True, content_checked=True)
+    result["artifacts"] = {}
+    result["revision"] = ep.get("revision", 1) + 1
+    result["updated_at"] = utc_now()
+    return validate_episode(result)
+
+
 def apply_edits(ep: dict, edits: dict) -> dict:
     """Patch by stable IDs; never replace raw text, timestamps, or segment order."""
     allowed = {"title", "description", "series", "speakers", "remove_speakers", "segments", "summary", "chapters", "review", "references"}
@@ -200,7 +243,13 @@ def apply_edits(ep: dict, edits: dict) -> dict:
     result = deepcopy(ep)
     result["status"] = "draft"
     result["artifacts"] = {}
-    result["review"] = {"speakers_confirmed": False, "content_checked": False}
+    previous_review = _review_flags(ep)
+    result["review"] = deepcopy(previous_review)
+    result["review"].update(speakers_confirmed=False, content_checked=False)
+    review_patch = edits.get("review", {})
+    if not isinstance(review_patch, dict) or set(review_patch) - REVIEW_FIELDS:
+        raise ContentError("review 仅接受人物/内容校对布尔值、mode 和 basis")
+    _review_flags({"review": review_patch})
     for key in ("title", "description", "series", "summary", "chapters", "references"):
         if key in edits:
             result[key] = deepcopy(edits[key])
@@ -241,10 +290,21 @@ def apply_edits(ep: dict, edits: dict) -> dict:
         if ident in used:
             raise ContentError(f"说话人 {ident} 仍被段落引用；请先逐段重新分配 speaker_id")
     result["speakers"] = [person for person in result["speakers"] if person["id"] not in removed_ids]
-    if "review" in edits:
-        if not isinstance(edits["review"], dict) or set(edits["review"]) - set(result["review"]) or any(type(v) is not bool for v in edits["review"].values()):
-            raise ContentError("review 仅接受人物/内容校对布尔值")
-        result["review"].update(edits["review"])
+    result["review"].update(review_patch)
+    starting_precise = review_patch.get("mode") == "precise"
+    non_source_basis = previous_review.get("basis") in {"automated", "user_accepted"}
+    changing_to_source = (review_patch.get("basis") == "source_checked" and non_source_basis)
+    if non_source_basis and (starting_precise or changing_to_source):
+        # Changing the mode/basis alone cannot turn an automatic result into
+        # source-checked speech. A later, explicit per-segment review can.
+        for segment in result["segments"]:
+            if segment.get("review_status") == "reviewed":
+                segment["review_status"] = "edited"
+        result["review"].update(speakers_confirmed=False, content_checked=False)
+    if starting_precise:
+        result["review"].update(speakers_confirmed=False, content_checked=False)
+        if result["review"].get("basis") in {"automated", "user_accepted"}:
+            result["review"].pop("basis")
     result["revision"] = ep.get("revision", 1) + 1
     result["updated_at"] = utc_now()
     return validate_episode(result)

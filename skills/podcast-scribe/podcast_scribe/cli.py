@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 import sys
 
-from .model import ContentError, apply_edits, load_episode, new_episode, save_episode, utc_now, validate_episode, write_json
+from .model import (ContentError, REVIEW_BASES, REVIEW_MODES, apply_edits,
+                    complete_episode, load_episode, new_episode, save_episode,
+                    utc_now, validate_episode, write_json)
 
 
 def _read(path):
@@ -21,6 +23,11 @@ def _series(parser):
 
 def _output(parser):
     parser.add_argument("--output", type=Path, help="默认 data/<来源 ID>/episode.json；存在时不会覆盖")
+
+
+def _review_mode(parser):
+    parser.add_argument("--review-mode", choices=sorted(REVIEW_MODES), default="auto",
+                        help="auto 自动整理完成；precise 保留逐段精校流程（默认 auto）")
 
 
 def _cookie_options(parser):
@@ -45,13 +52,21 @@ def _new_destination(path):
 
 def _save_new(args, metadata, segments, speakers):
     from .defaults import save_new_episode
-    ep = new_episode(metadata, segments, speakers, series_id=args.series_id, series_title=args.series_title)
+    ep = new_episode(metadata, segments, speakers, series_id=args.series_id,
+                     series_title=args.series_title, review_mode=args.review_mode)
     if "input_identity" in metadata:
         ep["input_identity"] = metadata["input_identity"]
     if getattr(args, "demo", False):
         ep["is_demo"] = True
     save_new_episode(args.output, ep)
     print(args.output.resolve())
+
+
+def _save_revision(path, before, after):
+    backup = path.parent / "history" / f"{before['id']}-r{before.get('revision', 1)}.json"
+    if not backup.exists():
+        write_json(backup, before)
+    save_episode(path, after)
 
 
 def _resume_default(args, identity, *, default_output: bool) -> bool:
@@ -81,7 +96,7 @@ def parser():
     p.add_argument("--cache", type=Path, default=Path("data/cache"))
     p.add_argument("--language", default="zh")
     _cookie_options(p)
-    _series(p); _output(p)
+    _series(p); _output(p); _review_mode(p)
     p = sub.add_parser("transcribe", help="将本地音视频发送到 OpenAI 转写，产生 API 费用")
     p.add_argument("file", type=Path)
     p.add_argument("--id")
@@ -89,18 +104,22 @@ def parser():
     p.add_argument("--source-url", default="")
     p.add_argument("--cache", type=Path, default=Path("data/cache"))
     p.add_argument("--language", default="zh")
-    _series(p); _output(p)
+    _series(p); _output(p); _review_mode(p)
     p = sub.add_parser("import", help="导入 JSON/SRT/VTT；无人物标签时明确标为待确认")
     p.add_argument("file", type=Path)
     p.add_argument("--id")
     p.add_argument("--title")
     p.add_argument("--source-url", default="")
     p.add_argument("--demo", action="store_true", help="标为自制演示，只允许预览")
-    _series(p); _output(p)
+    _series(p); _output(p); _review_mode(p)
     p = sub.add_parser("edit", help="按稳定 ID 应用整理稿、人物、摘要、章节和校对状态")
     p.add_argument("episode", type=Path)
     p.add_argument("--edits", type=Path, required=True)
     p.add_argument("--batch", type=Path, help="校验 batch 的版本与内容摘要，仅允许修改本批目标段落")
+    p = sub.add_parser("complete", help="记录自动整理、用户接受或来源精校完成依据")
+    p.add_argument("episode", type=Path)
+    p.add_argument("--basis", choices=sorted(REVIEW_BASES),
+                   help="省略时 auto 使用 automated，precise 使用 source_checked；user_accepted 仅用于用户明确接受当前稿")
     p = sub.add_parser("status", help="查看精简校对进度，不输出全文")
     p.add_argument("episode", type=Path)
     p = sub.add_parser("batch", help="按字符预算读取完整段落，默认跳过已校对段落")
@@ -278,11 +297,13 @@ def run(args):
             from .editing import validate_batch_edits
             validate_batch_edits(before, edits, _read(args.batch))
         after = apply_edits(before, edits)
-        backup = args.episode.parent / "history" / f"{before['id']}-r{before.get('revision', 1)}.json"
-        if not backup.exists():
-            write_json(backup, before)
-        save_episode(args.episode, after)
+        _save_revision(args.episode, before, after)
         print(f"已保存草稿 r{after['revision']}：{args.episode.resolve()}")
+    elif args.command == "complete":
+        before = load_episode(args.episode, for_edit=True)
+        after = complete_episode(before, basis=args.basis)
+        _save_revision(args.episode, before, after)
+        print(f"已完成（{after['review']['basis']}）并保存草稿 r{after['revision']}：{args.episode.resolve()}")
     elif args.command == "export":
         from .exporters import export_episode
         ep = load_episode(args.episode)

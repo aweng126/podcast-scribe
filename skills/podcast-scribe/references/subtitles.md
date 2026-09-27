@@ -1,6 +1,6 @@
 # 字幕辅助核验
 
-在逐句回听前，先用已有字幕与当前整理稿对照。字幕只提供另一份文字证据：可能经过删改、错字或自动识别，不自动替换正文、合并人物，也不自动设置 `reviewed`。用户仍只需提供 Skill 名称与素材；以下命令、缓存路径和抽帧参数由 Agent 选择。
+自动模式使用可用字幕辅助整理，不把逐句回听作为交付条件；精准模式在回听前先用字幕与当前稿对照。字幕只提供另一份文字证据：可能经过删改、错字或自动识别，不自动替换正文、合并人物，也不自动设置 `reviewed`。用户仍只需提供 Skill 名称与素材；以下命令、缓存路径和抽帧参数由 Agent 选择。
 
 ## 默认字幕采集
 
@@ -24,7 +24,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" check-subtitles data/my-episode/episode.jso
 
 ## 画面字幕 OCR
 
-成功查询却没有独立轨时，不能据此推断画面没有字幕。检查视频画面；有印在画面里的字幕时，使用本地 OCR。先确认环境：
+以下流程用于精准模式或用户明确要求画面字幕核验时；自动模式缺少独立字幕轨可直接继续整理。无独立轨不能证明画面没有字幕，应检查视频画面；有画面字幕时使用本地 OCR。先确认环境：
 
 ```sh
 bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require ocr
@@ -58,6 +58,6 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" subtitle-batch data/my-episode/episode.json
 
 默认 6000 字符，按返回的 `next_after` 用 `--after` 续读。单组超过预算时提高 `--max-chars`；报告中异常长的文本可能以 `detail_truncated` 标记摘录，须按 ID 回读原字幕证据和正文，不能把摘录当成完整依据。正文、时间、人物或校对状态改变后，报告会被识别为陈旧，需重新对照；此过程复用字幕缓存，不重新识别音频。
 
-Agent 优先处理数字、否定、人名术语、漏句、低置信 OCR 和说话人交叠。对照报告本身不修改文稿；依据字幕和原音作出修订时，仍使用新的 `batch` 与 `edit --batch` 保存，保留原始转写和历史。实际逐段核验后才标记 `reviewed`，记录依据和范围；“字幕文字一致”不等于“已经逐句听音”。人物归属另行核对。完成后重新生成摘要、章节和导出，按原分享规则投稿。
+Agent 优先处理数字、否定、人名术语、漏句、低置信 OCR 和说话人交叠。对照报告本身不修改文稿；依据字幕和原音作出修订时，仍使用新的 `batch` 与 `edit --batch` 保存，保留原始转写和历史。精准模式逐段核验后标记 `reviewed` 并记录依据和范围；自动模式完成全文整理后用 `complete` 记录为 `automated`。“字幕文字一致”不等于“已经逐句听音”。先更新摘要与章节，再按所选模式运行 `complete` 并导出；用户同意分享时按 [分享流程](sharing.md) 准备材料。
 
 实现依据：[yt-dlp 字幕选项](https://github.com/yt-dlp/yt-dlp#subtitle-options)、[Tesseract 文档](https://tesseract-ocr.github.io/tessdoc/)。

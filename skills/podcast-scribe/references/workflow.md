@@ -84,7 +84,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" transcribe '/path/to/episode.mp4'
 bash "$PS_SKILL_ROOT/scripts/run.sh" import '/path/to/transcript.json'
 ```
 
-这些命令自动推导 ID、标题和输出路径，输出实际保存或复用的单集 JSON 路径。`ingest` 内部检查来源；需要单独查看元数据时才用 `inspect`。用户明确指定时才传 `--output`、`--id`、`--title`、`--series-id` 或 `--series-title` 等受支持参数。已有稿件保留人工修改；需要另存一份草稿时指定新的输出路径，转写仍可复用缓存。
+这些命令默认使用自动模式，自动推导 ID、标题和输出路径，输出实际保存或复用的单集 JSON 路径。用户选择精准模式时传 `--review-mode precise`；复用已有稿件时以记录中的实际模式为准，需要切换则通过 `edit` 更新 `review.mode`。`ingest` 内部检查来源；需要单独查看元数据时才用 `inspect`。用户明确指定时才传 `--output`、`--id`、`--title`、`--series-id` 或 `--series-title` 等受支持参数。已有稿件保留人工修改；需要另存一份草稿时指定新的输出路径，转写仍可复用缓存。
 
 `ingest/transcribe` 将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。长音频自动转换、分片、逐片检查上传大小并保存成功缓存；中断后复用成功片段。跨片人物对应仍须校对，详见 [长音视频](long-audio.md)。不要把缓存复用当作校对完成。
 
@@ -123,21 +123,22 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" inspect 'https://www.bilibili.com/video/BV1
 
 不要让用户把 cookies 内容粘贴到聊天。yt-dlp 会读取获授权浏览器的 cookie 库；供请求使用的内存 cookie 仅保留未过期的 `bilibili.com` 及其子域 cookies，不导出或写回登录态，也不把 cookie 值或文件路径写入日志、文稿、缓存元数据或分享文件。用户提供的 cookies 文件保持本地，不能随项目、音频或公开投稿上传。
 
-此流程参考 [bilibili-to-doc](https://github.com/programmerloverun/bilibili-to-doc) 使用浏览器登录态的方式；本项目仍默认获取音频并转写说话人，字幕仅辅助核对或由用户作为已有转写导入，没有人物标签时不猜测归属。cookies 格式和浏览器提取机制见 [yt-dlp 官方 FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)。
+此流程参考 [bilibili-to-doc](https://github.com/programmerloverun/bilibili-to-doc) 使用浏览器登录态的方式；本项目仍默认获取音频并转写说话人，字幕仅辅助核对或由用户作为已有转写导入，没有人物标签时，按所选模式结合明确的节目结构与问答上下文处理归属，未核实名字保留匿名标签。cookies 格式和浏览器提取机制见 [yt-dlp 官方 FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)。
 
 ## 校对与导出
 
-按 [数据约定](schema.md) 写入增量编辑，再校验与导出：
+按 [数据约定](schema.md) 分批整理全文、保存人物对应与摘要章节后，自动模式按以下方式收尾并导出：
 
 ```sh
 bash "$PS_SKILL_ROOT/scripts/run.sh" edit data/my-episode/episode.json --edits output/my-episode/edits-001.json --batch output/my-episode/batch-001.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" complete data/my-episode/episode.json
 bash "$PS_SKILL_ROOT/scripts/run.sh" validate data/my-episode/episode.json
 bash "$PS_SKILL_ROOT/scripts/run.sh" export data/my-episode/episode.json
 ```
 
 默认输出 `output/<id>/<id>.md` 和 `output/<id>/<id>.pdf`。用户只要 Markdown 时加 `--formats markdown`；用户指定路径时传 `--output-dir`。
 
-段落整理完成记为 `edited`，疑点记为 `needs_review`，实际核对后才设为 `reviewed`。全部段落为 `reviewed` 后才能确认整集内容校对；归属不明时不确认人物。修改正文或归属会重置相应校对状态。结构验证不能替代语义校对，无法完成来源核对时保留草稿并在交付时说明。旧稿校对冲突的修复见 [校对约定](schema.md#校对状态)。
+自动模式逐批记为 `edited`，Agent 完成全文整理后用 `complete` 记录 `automated` 并直接交付，无需用户手动校对。精准模式逐段核验后记为 `reviewed`，未解项请用户确认，再运行 `complete --basis source_checked`。用户明确接受当前稿时运行 `complete --basis user_accepted`，保留接受依据，不声称已经听音。`complete` 不修订文字，不代替全文整理。修改正文或归属后需重新收尾；详细状态与旧稿兼容见 [校对约定](schema.md#校对状态)。
 
 ## 可选阅读页与分享
 

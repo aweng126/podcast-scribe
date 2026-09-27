@@ -35,7 +35,8 @@ def test_markdown_keeps_complete_dialogue_and_source(episode, tmp_path):
     result = export_episode(episode, tmp_path, ["markdown"])
     document = result["markdown"].read_text(encoding="utf-8")
     assert episode == original
-    assert "草稿 · 尚未发布" in document
+    assert "自动整理处理中 · 未发布" in document
+    assert "文稿仍在整理中" in document
     assert "整理后的测试文本。" in document
     assert "原始测试文本。" not in document
     assert "未确认人物的测试文本。" in document
@@ -103,7 +104,7 @@ def test_pdf_chinese_long_speech_and_literal_markup(episode, tmp_path):
     reader = pypdf.PdfReader(result["pdf"])
     text = "".join(page.extract_text() for page in reader.pages)
     assert len(reader.pages) >= 3
-    assert "草稿" in text
+    assert "自动整理处理中" in text
     assert "段落末尾标记" in text
     assert "[词句待核对]" in text.replace("\n", "")
     assert "说话人待确认" in text
@@ -152,7 +153,7 @@ def test_continuous_speech_preserves_chapter_targets_without_repeated_labels(epi
     assert "(#segment-2)" in document
     assert "### 面对问题" not in dialogue
     assert " · 待核对" not in dialogue
-    assert "段落归属与文字仍需校对" in document
+    assert "文稿仍在整理中" in document
     assert "说话人待确认" in dialogue
     assert episode == original
 
@@ -165,7 +166,7 @@ def test_continuous_speech_preserves_chapter_targets_without_repeated_labels(epi
     assert visible.count("· 说话人 A") == 1
     assert "00:00:22 · 说话人 A" in visible
     assert " · 待核对" not in visible
-    assert "段落归属与文字仍需校对" in visible
+    assert "文稿仍在整理中" in visible
     assert any(annotation.get_object().get("/Dest") for page in reader.pages for annotation in page.get("/Annots", []))
     assert episode == original
 
@@ -223,3 +224,41 @@ def test_joined_text_keeps_paragraphs_and_english_word_spacing():
     assert "".join(segment_text_parts([
         {"text": "Hello,"}, {"text": "world."}, {"text": "Next"}, {"text": "sentence."},
     ])) == "Hello, world. Next sentence."
+
+
+@pytest.mark.parametrize("basis,label", [
+    ("automated", "自动整理完成"),
+    ("user_accepted", "用户已确认采用当前稿"),
+    ("source_checked", "人物与内容已校对"),
+    (None, "人物与内容已校对"),
+])
+def test_completed_exports_describe_the_actual_completion_basis(episode, tmp_path, basis, label):
+    episode["review"] = {"speakers_confirmed": True, "content_checked": True}
+    if basis:
+        episode["review"].update(mode="auto", basis=basis)
+    for segment in episode["segments"]:
+        segment.update(speaker_id="a", review_status="reviewed")
+    episode["segments"][0]["text"] += "正文注释[词句待核对]应原样保留。"
+    document = render_markdown(episode)
+    assert document.count(label) == 1
+    assert "未发布" in document
+    assert "草稿" not in document and "待复核" not in document
+    assert r"正文注释\[词句待核对\]应原样保留。" in document
+    if basis in {"automated", "user_accepted"}:
+        assert "已校对" not in document and "请结合来源核对" not in document
+    pytest.importorskip("reportlab")
+    pypdf = pytest.importorskip("pypdf")
+    path = export_episode(episode, tmp_path, ["pdf"])["pdf"]
+    text = "".join(page.extract_text() for page in pypdf.PdfReader(path).pages).replace("\n", "")
+    assert label in text and "听稿 · 未发布" in text
+    assert "草稿" not in text and "正文注释[词句待核对]应原样保留。" in text
+    if basis in {"automated", "user_accepted"}:
+        assert "已校对" not in text
+
+
+def test_precise_pending_export_retains_source_check_guidance(episode):
+    episode["review"]["mode"] = "precise"
+    document = render_markdown(episode)
+    assert "精准校对进行中" in document
+    assert "段落归属与文字仍需校对，请结合来源核对。" in document
+    assert "文稿仍在整理中" not in document

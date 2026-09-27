@@ -1,5 +1,5 @@
 name: 分享文稿
-description: 投稿已经整理、校对并确认可以公开分享的文稿。
+description: 投稿已完成自动整理或精准校对，并确认可以公开分享的文稿。
 title: "[分享] "
 body:
   - type: markdown

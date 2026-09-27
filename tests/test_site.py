@@ -179,6 +179,7 @@ class SiteTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is optional; used only to exercise client rendering")
     def test_reader_preserves_continuous_speech_and_interior_chapter_anchors(self):
         episode = fixture()
+        episode["review"]["mode"] = "precise"
         episode["segments"] = [
             {"id": "s1", "start": 22, "end": 30, "speaker_id": "a", "text": "困难不能躲避——", "review_status": "edited"},
             {"id": "s2", "start": 30, "end": 56, "speaker_id": "a", "text": "需要正面地想好。", "review_status": "needs_review"},
@@ -260,6 +261,7 @@ class SiteTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node is optional; used only to exercise client rendering")
     def test_references_render_in_reader_body_with_escaped_content(self):
         episode = fixture(status="draft")
+        episode["review"]["mode"] = "precise"
         episode["review"]["content_checked"] = False
         episode["segments"][0]["review_status"] = "unreviewed"
         episode["references"] = [{"title": '<img src=x onerror="alert(1)">', "url": "https://example.org/show?a=1&b=2", "note": '<script>alert("x")</script>'}]
@@ -297,3 +299,36 @@ class SiteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(shutil.which("node"), "Node is optional; used only to exercise client rendering")
+def test_default_auto_pending_reader_is_processing_not_manual_review(tmp_path):
+    episode = fixture(status="draft")
+    episode["review"] = {"speakers_confirmed": False, "content_checked": False}
+    episode["segments"][0]["review_status"] = "needs_review"
+    result = build_site([episode], tmp_path, include_drafts=True)
+    rendered = render_reader(result)
+    assert "自动整理处理中" in rendered and "文稿仍在整理中" in rendered
+    assert 'class="segment-review"' not in rendered
+    assert "待复核" not in rendered and "请结合来源核对" not in rendered
+    episode["review"]["mode"] = "precise"
+    result = build_site([episode], tmp_path, include_drafts=True)
+    precise = render_reader(result)
+    assert "精准校对进行中" in precise
+    assert 'class="segment-review">待核对' in precise
+    assert "段落说话人归属待复核。" in precise
+
+
+@unittest.skipUnless(shutil.which("node"), "Node is optional; used only to exercise client rendering")
+def test_completed_local_reader_preserves_basis_without_draft_notice(tmp_path):
+    episode = fixture(status="draft")
+    episode["segments"][0]["review_status"] = "reviewed"
+    for basis, label in [("automated", "自动整理完成"), ("user_accepted", "用户已确认采用当前稿")]:
+        episode["review"].update(mode="auto", basis=basis)
+        result = build_site([episode], tmp_path, include_drafts=True)
+        assert site_data(result)["episodes"][0]["review"]["basis"] == basis
+        rendered = render_reader(result)
+        assert rendered.count(label) == 1
+        assert "未发布" in rendered
+        assert "草稿预览" not in rendered and 'class="draft-notice"' not in rendered
+        assert "人物与内容已校对" not in rendered

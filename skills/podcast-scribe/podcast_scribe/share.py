@@ -128,9 +128,18 @@ def validate_submission(data: dict) -> dict:
     _text(ep["series"]["id"], "series.id", maximum=100)
     _text(ep["series"]["title"], "series.title", maximum=300)
     _text(ep["series"]["description"], "series.description", maximum=20000, empty=True, multiline=True)
-    _object(ep["review"], {"speakers_confirmed", "content_checked"}, "review")
-    if any(value is not True for value in ep["review"].values()):
-        raise ContentError("公开投稿需要完成人物与内容校对")
+    review = ep["review"]
+    required_review = {"speakers_confirmed", "content_checked"}
+    allowed_review = required_review | {"mode", "basis"}
+    if (not isinstance(review, dict) or not required_review <= set(review)
+            or not set(review) <= allowed_review):
+        raise ContentError("review 字段必须且只能为 speakers_confirmed、content_checked 及可选 mode、basis")
+    if any(review[key] is not True for key in required_review):
+        raise ContentError("公开投稿需要完成人物与内容整理")
+    for key, choices in (("mode", {"auto", "precise"}),
+                         ("basis", {"automated", "user_accepted", "source_checked"})):
+        if key in review and (not isinstance(review[key], str) or review[key] not in choices):
+            raise ContentError(f"review.{key} 必须为：{', '.join(sorted(choices))}")
     _list(ep["speakers"], "speakers", 200, minimum=1)
     for speaker in ep["speakers"]:
         _object(speaker, {"id", "name", "role"}, "speaker")
@@ -185,6 +194,7 @@ def make_submission(episode: dict, *, attribution: str) -> dict:
     ep["references"] = [{key: reference[key] for key in ("title", "url")}
                         for reference in episode.get("references", [])]
     ep["review"] = {key: episode["review"][key] for key in ("speakers_confirmed", "content_checked")}
+    ep["review"].update({key: episode["review"][key] for key in ("mode", "basis") if key in episode["review"]})
     return validate_submission({"schema_version": 1, "episode": ep, "attribution": attribution})
 
 

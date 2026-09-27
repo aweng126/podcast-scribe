@@ -96,17 +96,30 @@ def _segment_text(segment: dict) -> str:
     return _text(segment.get("text") or segment.get("raw_text"))
 
 
+def _review_label(episode: dict) -> str:
+    review = episode.get("review") or {}
+    if review.get("speakers_confirmed") and review.get("content_checked"):
+        # Records predating basis retain their original completed-review meaning.
+        return {
+            "automated": "自动整理完成",
+            "user_accepted": "用户已确认采用当前稿",
+        }.get(review.get("basis"), "人物与内容已校对")
+    return "精准校对进行中" if review.get("mode", "auto") == "precise" else "自动整理处理中"
+
+
 def _draft_note(episode: dict) -> str:
     review = episode.get("review") or {}
     if review.get("speakers_confirmed") and review.get("content_checked"):
-        return "人物与内容已校对；此版本尚未公开发布。"
+        return _review_label(episode) + "。"
+    if review.get("mode", "auto") != "precise":
+        return "文稿仍在整理中。"
     return "段落归属与文字仍需校对，请结合来源核对。"
 
 
 def _provenance_note(episode: dict) -> str:
     if episode.get("is_demo"):
         return "本文为自制功能演示，没有对应的原始音视频；时间戳仅为展示值。"
-    return "本文依据提供的转写资料整理。摘要与章节属于辅助阅读内容；请结合来源核对文字与时间戳。"
+    return "本文依据提供的转写资料整理。摘要与章节属于辅助阅读内容。"
 
 
 def _chapter_targets(episode: dict) -> list[tuple[dict, int | None]]:
@@ -145,18 +158,21 @@ def render_markdown(episode: dict) -> str:
     lines = [f"# {_md(title)}", ""]
     if episode.get("is_demo"):
         lines.extend(["> **自制功能演示 · 非真实视频转写**", "> 人物、对话与时间为演示内容，没有对应的原始音视频。", ""])
+    label = _review_label(episode)
+    review = episode.get("review") or {}
+    completed = bool(review.get("speakers_confirmed") and review.get("content_checked"))
     if episode.get("status") != "published":
-        lines.extend(["> **草稿 · 尚未发布**", "> " + _draft_note(episode), ""])
+        lines.append(f"> **{label} · 未发布**")
+        if not completed:
+            lines.append("> " + _draft_note(episode))
+        lines.append("")
     lines.extend(f"- **{label}**：{_md(value)}" for label, value in _metadata(episode))
     source_url = _video_url(episode)
     if source_url:
         lines.append(f"- **来源**：[原视频]({source_url})")
-    review = episode.get("review") or {}
-    lines.extend([
-        f"- **说话人归属校对**：{'已确认' if review.get('speakers_confirmed') else '待复核'}",
-        f"- **内容校对**：{'已完成' if review.get('content_checked') else '待校对'}",
-        "",
-    ])
+    if episode.get("status") == "published":
+        lines.append(f"- **整理状态**：{label}")
+    lines.append("")
     if episode.get("description"):
         lines.extend([_md(episode["description"]), ""])
     speakers = _speaker_map(episode)
@@ -330,7 +346,9 @@ def _render_pdf(episode: dict, path: Path, font: str) -> None:
     ink = colors.HexColor("#233A3D")
     teal = colors.HexColor("#276F72")
     muted = colors.HexColor("#647477")
-    draft = episode.get("status") != "published"
+    unpublished = episode.get("status") != "published"
+    review = episode.get("review") or {}
+    completed = bool(review.get("speakers_confirmed") and review.get("content_checked"))
     title = _one_line(episode.get("title")) or "未命名单集"
     common = dict(fontName=font, wordWrap="CJK", splitLongWords=True, alignment=TA_LEFT)
     styles = {
@@ -362,19 +380,18 @@ def _render_pdf(episode: dict, path: Path, font: str) -> None:
     add(title, "title")
     if episode.get("is_demo"):
         add("自制功能演示 · 非真实视频转写\n人物、对话与时间为演示内容，没有对应的原始音视频。", "draft")
-    if draft:
-        add("草稿 · 尚未发布\n" + _draft_note(episode), "draft")
+    if unpublished:
+        note = _review_label(episode) + " · 未发布"
+        if not completed:
+            note += "\n" + _draft_note(episode)
+        add(note, "meta" if completed else "draft")
     for label, value in _metadata(episode):
         add(f"{label}：{value}", "meta")
     source_url = _video_url(episode)
     if source_url:
         add(f'来源：<link href="{_xml(source_url)}" color="#276F72">{_xml(source_url)}</link>', "meta", True)
-    review = episode.get("review") or {}
-    add(
-        f"说话人归属校对：{'已确认' if review.get('speakers_confirmed') else '待复核'}　"
-        f"内容校对：{'已完成' if review.get('content_checked') else '待校对'}",
-        "meta",
-    )
+    if not unpublished:
+        add("整理状态：" + _review_label(episode), "meta")
     if episode.get("description"):
         story.append(Spacer(1, 9))
         add(episode["description"])
@@ -436,7 +453,7 @@ def _render_pdf(episode: dict, path: Path, font: str) -> None:
         canvas.line(48, 43, width - 48, 43)
         canvas.setFont(font, 8)
         canvas.setFillColor(muted)
-        canvas.drawString(48, 29, "听稿" + (" · 草稿" if draft else ""))
+        canvas.drawString(48, 29, "听稿" + (" · 未发布" if unpublished else ""))
         canvas.drawRightString(width - 48, 29, f"第 {doc.page} 页")
         canvas.restoreState()
 

@@ -226,3 +226,47 @@ def test_cli_requires_explicit_public_confirmation_and_never_overwrites(reviewed
     assert not (episode_path.parent / "history").exists()
     assert main([*args, "--confirm-public", "--output", str(episode_path)]) == 2
     assert episode_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("mode,basis,label", [
+    ("auto", "automated", "自动整理完成"),
+    ("auto", "user_accepted", "用户已确认采用当前稿"),
+    ("precise", "source_checked", "人物与内容已校对"),
+    (None, None, "人物与内容已校对"),
+])
+def test_completion_basis_survives_public_round_trip(reviewed, mode, basis, label, tmp_path):
+    from podcast_scribe.exporters import render_markdown
+    from podcast_scribe.site import build_site
+    from test_site import site_data, render_reader
+    import shutil
+
+    if mode:
+        reviewed["review"].update(mode=mode, basis=basis)
+    public = loads_submission(canonical_bytes(make_submission(reviewed, attribution="测试署名")))
+    assert public["episode"]["review"] == reviewed["review"]
+    rendered = submission_episode(public)
+    assert label in render_markdown(rendered)
+    site = build_site([rendered], tmp_path)
+    assert site_data(site)["episodes"][0]["review"] == reviewed["review"]
+    if shutil.which("node"):
+        reader = render_reader(site)
+        assert reader.count(label) == 1
+        assert "草稿预览" not in reader
+        if basis in {"automated", "user_accepted"}:
+            assert "人物与内容已校对" not in reader
+
+
+@pytest.mark.parametrize("key,value", [
+    ("mode", "manual"), ("mode", []), ("mode", None),
+    ("basis", "heard"), ("basis", True), ("basis", {}),
+])
+def test_public_review_rejects_invalid_optional_mode_and_basis(submission, key, value):
+    submission["episode"]["review"][key] = value
+    with pytest.raises(ContentError, match="review"):
+        validate_submission(submission)
+
+
+def test_public_review_rejects_automated_precise_completion(submission):
+    submission["episode"]["review"].update(mode="precise", basis="automated")
+    with pytest.raises(ContentError):
+        validate_submission(submission)

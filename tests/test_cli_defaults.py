@@ -68,7 +68,7 @@ def test_import_needs_only_a_filename_and_uses_content_identity(workspace, capsy
     assert ep["title"] == source.stem and ep["series"]["id"] == "inbox"
     assert ep["input_identity"] == expected["identity"]
     assert ep["segments"][0]["raw_text"] == ROWS[0]["text"]
-    assert ep["review"] == {"speakers_confirmed": False, "content_checked": False}
+    assert ep["review"] == {"speakers_confirmed": False, "content_checked": False, "mode": "auto"}
 
 
 def test_transcribe_needs_only_a_filename_and_keeps_default_and_override_language(workspace, offline_video, capsys):

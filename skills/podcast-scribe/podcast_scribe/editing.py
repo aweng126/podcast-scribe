@@ -24,6 +24,10 @@ def episode_digest(episode: dict) -> str:
 def editing_status(episode: dict) -> dict:
     segments = episode["segments"]
     pending = [s for s in segments if s.get("review_status") != "reviewed"]
+    review = episode.get("review", {})
+    completed = all(review.get(key) is True for key in ("speakers_confirmed", "content_checked"))
+    completion_basis = review.get("basis") if completed else None
+    completion_status = (completion_basis or "legacy_checked") if completed else "incomplete"
     return {
         "episode_id": episode["id"], "revision": episode.get("revision", 1),
         "segments": len(segments), "reviewed": len(segments) - len(pending),
@@ -32,7 +36,10 @@ def editing_status(episode: dict) -> dict:
         "unknown_speakers": sum(s.get("speaker_id") is None for s in segments),
         "remaining_text_chars": sum(len(s["text"]) for s in pending),
         "next_segment_id": pending[0]["id"] if pending else None,
-        "review": episode.get("review", {}),
+        "review": review,
+        "review_mode": review.get("mode", "auto"),
+        "completion_basis": completion_basis,
+        "completion_status": completion_status,
     }
 
 
