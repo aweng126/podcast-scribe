@@ -145,7 +145,15 @@ def test_cloud_adapter_requests_speaker_segments_and_reuses_success_cache(tmp_pa
     calls = []
     def create(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(model_dump=lambda: {"segments": [{"start": 0, "end": 1, "speaker": "A", "text": "仅测试接口契约"}]})
+        class Stream:
+            def __iter__(self):
+                return iter([
+                    {"type": "transcript.text.segment", "id": "part-1", "start": 0, "end": 1,
+                     "speaker": "A", "text": "仅测试接口契约"},
+                    {"type": "transcript.text.done", "text": "仅测试接口契约"},
+                ])
+            def close(self): pass
+        return Stream()
     class Client:
         def __init__(self, **kwargs):
             self.audio = SimpleNamespace(transcriptions=SimpleNamespace(create=create))
@@ -159,6 +167,7 @@ def test_cloud_adapter_requests_speaker_segments_and_reuses_success_cache(tmp_pa
     assert first == second and len(calls) == 1
     assert calls[0]["response_format"] == "diarized_json"
     assert calls[0]["chunking_strategy"] == "auto"
+    assert calls[0]["stream"] is True
     assert first[0][0]["speaker_id"] == first[1][0]["id"]
 
 

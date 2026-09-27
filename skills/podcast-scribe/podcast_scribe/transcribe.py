@@ -125,7 +125,57 @@ def _load_manifest(work: Path, source_hash: str, config: dict) -> dict | None:
     return manifest
 
 
-def _request(client, audio_path: Path, language: str, references: list[dict], work: Path) -> dict:
+class _IncompleteStream(ContentError):
+    pass
+
+
+def _stream_payload(stream, duration: float | None) -> dict:
+    """Only a complete, internally consistent diarized stream is cacheable."""
+    segments, identifiers = [], set()
+    for event in stream:
+        data = event if isinstance(event, dict) else event.model_dump()
+        if not isinstance(data, dict):
+            raise ContentError("转写流包含无效事件，未计为成功")
+        kind = data.get("type")
+        if kind == "transcript.text.segment":
+            ident = data.get("id")
+            if not isinstance(ident, str) or not ident or ident in identifiers:
+                raise ContentError("转写流段落 ID 缺失或重复，未计为成功")
+            if not all(key in data for key in ("start", "end", "speaker", "text")):
+                raise ContentError("转写流段落字段不完整，未计为成功")
+            row = {key: data[key] for key in ("id", "start", "end", "speaker", "text")}
+            if not _rows({"segments": [row]}, duration):
+                raise ContentError("转写流段落正文为空，未计为成功")
+            if segments and row["start"] < segments[-1]["start"]:
+                raise ContentError("转写流段落未按时间排序，未计为成功")
+            identifiers.add(ident)
+            segments.append(row)
+        elif kind == "transcript.text.delta":
+            if not isinstance(data.get("delta"), str):
+                raise ContentError("转写流增量文本无效，未计为成功")
+            # Deltas are provisional and may repeat completed segment text.
+        elif kind == "transcript.text.done":
+            text = data.get("text")
+            if not isinstance(text, str):
+                raise ContentError("转写完成事件缺少全文，未计为成功")
+            joined = "".join(row["text"] for row in segments)
+            if "".join(text.split()) != "".join(joined.split()):
+                raise ContentError("转写完成全文与已完成段落不一致，未计为成功")
+            payload = {"text": text, "segments": segments}
+            for key in ("usage", "duration"):
+                if data.get(key) is not None:
+                    payload[key] = data[key]
+            _rows(payload, duration)
+            # done is the terminal success signal. Do not wait for transport EOF,
+            # which may be delayed or reported as an error during normal close.
+            return payload
+        else:
+            raise ContentError("转写流返回错误或未知事件，未计为成功")
+    raise _IncompleteStream("转写流在完成事件之前中断，未计为成功")
+
+
+def _request(client, audio_path: Path, language: str, references: list[dict], work: Path,
+             duration: float | None = None) -> dict:
     extra = {}
     if references:
         extra = {"extra_body": {
@@ -136,15 +186,30 @@ def _request(client, audio_path: Path, language: str, references: list[dict], wo
     for attempt in range(MAX_ATTEMPTS):
         try:
             with audio_path.open("rb") as audio:
-                return client.audio.transcriptions.create(
+                stream = client.audio.transcriptions.create(
                     file=audio, model=MODEL, response_format="diarized_json",
-                    chunking_strategy="auto", language=language, **extra,
-                ).model_dump()
+                    chunking_strategy="auto", language=language, stream=True, **extra,
+                )
+                try:
+                    return _stream_payload(stream, duration)
+                finally:
+                    try:
+                        stream.close()
+                    except Exception:
+                        # Closing a received, validated done must never cause a
+                        # second billable request or hide the original failure.
+                        pass
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             temporary = status in (408, 409, 429) or (isinstance(status, int) and status >= 500)
-            temporary = temporary or type(exc).__name__ in ("APIConnectionError", "APITimeoutError", "TimeoutError")
+            temporary = temporary or isinstance(exc, _IncompleteStream) or type(exc).__name__ in (
+                "APIConnectionError", "APITimeoutError", "TimeoutError", "RemoteProtocolError",
+                "ConnectError", "ReadError", "WriteError", "ProxyError", "ConnectTimeout",
+                "ReadTimeout", "WriteTimeout", "PoolTimeout",
+            )
             if not temporary or attempt + 1 == MAX_ATTEMPTS:
+                if isinstance(exc, ContentError):
+                    raise
                 label = f"HTTP {status}" if status else type(exc).__name__
                 raise ContentError(f"转写接口失败（{label}）；已保存成功分片，重跑原命令可继续。") from exc
             # A timed-out request may already have been billed; never retry forever.
@@ -306,7 +371,7 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
                         raise ContentError("单个音频分片超过 24 MB，已停止上传")
                     chunk["audio_sha256"] = _sha256(path)
                     write_json(work / "manifest.json", manifest)
-                    payload = _request(client, path, language, references, work)
+                    payload = _request(client, path, language, references, work, chunk["end"] - chunk["start"])
                     _rows(payload, chunk["end"] - chunk["start"])
                     write_json(response_path, {"context": context, "response": payload})
                 rows = _rows(payload, chunk["end"] - chunk["start"])

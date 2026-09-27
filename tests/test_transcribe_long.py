@@ -40,7 +40,16 @@ def mocked_pipeline(monkeypatch, tmp_path):
         result = state["results"].pop(0)
         if isinstance(result, Exception):
             raise result
-        return SimpleNamespace(model_dump=lambda: result)
+        assert kwargs["stream"] is True
+        events = [{"type": "transcript.text.segment", "id": f"part-{i}", **row}
+                  for i, row in enumerate(result.get("segments", []))]
+        done = {"type": "transcript.text.done", "text": result.get("text", "".join(row["text"] for row in result.get("segments", [])))}
+        if "duration" in result:
+            done["duration"] = result["duration"]
+        class Stream:
+            def __iter__(self): return iter([*events, done])
+            def close(self): pass
+        return Stream()
 
     class Client:
         def __init__(self, **kwargs):
