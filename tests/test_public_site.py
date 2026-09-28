@@ -643,3 +643,75 @@ def test_public_build_script_reads_default_and_custom_series_overrides(tmp_path,
     assert builder.main(["--output-dir", str(output), "--series-catalog", str(catalog_file),
                          "--series-overrides", str(alternate)]) == 0
     assert metadata(output / "index.html")["episodes"][0]["series"]["id"] == "series"
+
+
+def test_replacement_reports_lost_issue_override_without_changing_frozen_records():
+    old, new = record(issue=17), record(issue=23, content="修订后的正文")
+    catalog, overrides = series_catalog(), series_overrides("17")
+    before = deepcopy((old, new, catalog, overrides))
+    report = builder_module().replacement_report([old, new], 17, 23, catalog, overrides)
+    assert report["old"]["original_series"]["id"] == "series"
+    assert report["old"]["effective_series"]["id"] == "confirmed-series"
+    assert report["new"]["original_series"]["id"] == "series"
+    assert report["new"]["effective_series"]["id"] == "series"
+    assert report["new"]["override"] is None
+    assert report["same_episode_id"] and report["effective_series_changed"]
+    assert report["requires_series_review"] and report["override_action"] == "review_old_override"
+    assert (old, new, catalog, overrides) == before
+
+
+def test_replacement_keeps_new_explicit_override_instead_of_copying_old_one():
+    old, new = record(issue=17), record(issue=23, content="修订后的正文")
+    overrides = series_overrides("17")
+    overrides["issues"]["23"] = {"series_id": "inbox", "evidence_url": "https://example.com/new-evidence"}
+    report = builder_module().replacement_report([old, new], 17, 23, series_catalog(), overrides)
+    assert report["new"]["effective_series"]["id"] == "inbox"
+    assert report["new"]["override"] == overrides["issues"]["23"]
+    assert report["override_action"] == "verify_new_override"
+
+
+def test_replacement_uses_site_catalog_alias_rules_and_compares_explicit_sources():
+    old, new = record(issue=17), record(identifier="different-episode", issue=23)
+    for item, title in ((old, "节目简称"), (new, "确认的访谈系列")):
+        item["submission"]["episode"]["series"].update(id="confirmed-series", title=title)
+    new["submission"]["episode"]["source"]["url"] = "https://example.com/another-episode"
+    for item in (old, new):
+        item["provenance"]["payload_sha256"] = submission_digest(item["submission"])
+    report = builder_module().replacement_report(
+        [old, new], 17, 23, series_catalog(), {"schema_version": 1, "issues": {}})
+    assert report["old"]["original_series"]["title"] == "节目简称"
+    assert report["old"]["effective_series"] == report["new"]["effective_series"]
+    assert not report["effective_series_changed"] and not report["requires_series_review"]
+    assert not report["same_episode_id"] and not report["same_source_url"]
+    assert len(report["warnings"]) == 2
+
+
+def replacement_cli_inputs(tmp_path):
+    episodes = tmp_path / "episodes"
+    episodes.mkdir()
+    for issue in (17, 23):
+        (episodes / f"issue-{issue}.json").write_text(json.dumps(record(issue=issue, content=f"版本 {issue}")))
+    catalog, overrides = tmp_path / "catalog.json", tmp_path / "overrides.json"
+    catalog.write_text(json.dumps(series_catalog()))
+    overrides.write_text(json.dumps(series_overrides("17")))
+    return ["--content-dir", str(episodes), "--series-catalog", str(catalog),
+            "--series-overrides", str(overrides), "--output-dir", str(tmp_path / "site")]
+
+
+def test_replacement_cli_accepts_duplicate_episode_ids_without_building_or_writing(tmp_path, capsys):
+    args = replacement_cli_inputs(tmp_path)
+    before = {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+    assert builder_module().main([*args, "--check-replacement", "17", "23"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["old"]["issue"] == 17 and report["new"]["issue"] == 23
+    assert report["override_action"] == "review_old_override"
+    assert not (tmp_path / "site").exists()
+    assert before == {path.relative_to(tmp_path): path.read_bytes() for path in tmp_path.rglob("*") if path.is_file()}
+
+
+@pytest.mark.parametrize("numbers", [("17", "17"), ("-1", "23"), ("17", "99")])
+def test_replacement_cli_rejects_invalid_or_missing_issues(tmp_path, capsys, numbers):
+    args = replacement_cli_inputs(tmp_path)
+    assert builder_module().main([*args, "--check-replacement", *numbers]) == 2
+    assert "failed" in capsys.readouterr().err
+    assert not (tmp_path / "site").exists()

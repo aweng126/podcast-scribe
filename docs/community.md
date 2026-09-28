@@ -72,7 +72,15 @@ Skill 在导出和投稿前负责依据官方节目资料填写系列，用户�
 
 ## 修改已收录文稿
 
-用户修订本地稿并重新完成所选模式后，通过新 Issue 投稿，在评论中提供旧 Issue 链接。新投稿 PR 尚未合并时，维护者切换到它的 `community/issue-<新编号>` 分支，删除旧的 `content/episodes/issue-<旧编号>.json` 及存在的 `content/episodes/issue-<旧编号>/` 分片目录，将删除提交到同一个 PR 分支。核对新增与删除的是同一单集，再运行检查并合并。
+用户修订本地稿并重新完成所选模式后，通过新 Issue 投稿，在评论中提供旧 Issue 链接。新投稿 PR 尚未合并时，维护者切换到它的 `community/issue-<新编号>` 分支，先保留新旧记录并检查分类。例如用 Issue #23 替换 #17：
+
+```sh
+python3 scripts/build_public_site.py --check-replacement 17 23
+```
+
+该命令只输出新旧投稿的原始系列、当前有效系列和 Issue 分类覆盖，不构建站点或修改文件。即使两份记录的单集 ID 相同，也不会自动迁移分类。先核实确为同一单集的修订稿；若旧 Issue 有维护者覆盖，新编号不会继承它。依据仍适用且新稿仍需纠正分类时，在 `content/series-overrides.json` 的新 Issue 编号下添加系列与依据链接；新稿原始分类已正确时可以不添加。新编号已有覆盖时核实其内容，不能直接用旧覆盖替换。修改后重跑此命令，确认变更前后的有效分类。
+
+确认后，删除旧的 `content/episodes/issue-<旧编号>.json` 及存在的 `content/episodes/issue-<旧编号>/` 分片目录，可一并删除旧 Issue 的分类覆盖。将新增、删除和所需分类调整提交到同一个 PR 分支，运行 `python3 scripts/build_public_site.py` 并等待 `Community validation` 通过后合并。冻结投稿正文与 SHA-256 保持不变。
 
 同一单集保留原 `id`，直接同时收录新旧记录会触发重复 ID 校验失败。旧稿还未收录时，关闭旧 PR 即可。机器人不会因为评论或 Issue 正文变化而自动替换已固定内容。
 

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
+import json
 from pathlib import Path
 import re
 import sys
@@ -11,8 +13,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills" / "podcast-scribe"))
 
-from podcast_scribe.public_site import build_public_site, load_series_overrides  # noqa: E402
-from podcast_scribe.series import load_catalog  # noqa: E402
+from podcast_scribe.public_site import (  # noqa: E402
+    _apply_series, build_public_site, load_series_overrides, validate_record,
+    validate_series_overrides,
+)
+from podcast_scribe.series import load_catalog, validate_catalog  # noqa: E402
 from podcast_scribe.share import MAX_SUBMISSION_BYTES  # noqa: E402
 from podcast_scribe.public_storage import load_stored_record  # noqa: E402
 
@@ -47,19 +52,89 @@ def load_records(directory: Path) -> list[dict]:
     return records
 
 
+def replacement_report(records: list[dict], old_issue: int, new_issue: int,
+                       catalog: dict, overrides: dict) -> dict:
+    """Compare two explicitly selected Issues without replacing or reclassifying either."""
+    if old_issue <= 0 or new_issue <= 0 or old_issue == new_issue:
+        raise ValueError("Replacement requires two different positive Issue numbers.")
+    catalog = validate_catalog(catalog)
+    overrides = validate_series_overrides(overrides, catalog)
+    selected = {}
+    for source in records:
+        number = int(source["provenance"]["issue_url"].rsplit("/", 1)[1])
+        if number not in (old_issue, new_issue):
+            continue
+        if number in selected:
+            raise ValueError(f"Duplicate source Issue #{number}.")
+        record = validate_record(source)
+        original = record["submission"]["episode"]
+        # Use the exact display rules used by the site, on a detached metadata
+        # copy. A replacement report never edits the frozen submission or hash.
+        display = {"references": []}
+        _apply_series(display, record, catalog, overrides)
+        selected[number] = {
+            "issue": number, "episode_id": original["id"], "title": original["title"],
+            "source_url": original["source"]["url"],
+            "original_series": deepcopy(original["series"]),
+            "effective_series": display["series"],
+            "override": deepcopy(overrides["issues"].get(str(number))),
+        }
+    for number in (old_issue, new_issue):
+        if number not in selected:
+            raise ValueError(f"Issue #{number} is missing; run this check before removing the old record.")
+    old, new = selected[old_issue], selected[new_issue]
+    changed = old["effective_series"] != new["effective_series"]
+    same_id = old["episode_id"] == new["episode_id"]
+    same_source = old["source_url"] == new["source_url"]
+    if new["override"]:
+        action = "verify_new_override"
+        message = "新 Issue 已有分类覆盖；请核实目标系列与依据链接，旧 Issue 的覆盖不会自动迁移。"
+    elif old["override"]:
+        action = "review_old_override"
+        message = ("旧 Issue 的分类覆盖不会随正文替换迁移。请核实新稿归属；"
+                   "若仍需该覆盖，在新 Issue 编号下添加适用的系列与依据链接。")
+    elif changed:
+        action = "verify_series_change"
+        message = "替换后的有效分类发生变化，请核实新稿系列；必要时为新 Issue 添加分类覆盖。"
+    else:
+        action = "none"
+        message = "有效分类一致，且没有需要迁移的旧 Issue 分类覆盖。"
+    warnings = []
+    if not same_id:
+        warnings.append("新旧单集 ID 不同，请先确认这是同一单集的修订稿。")
+    if not same_source:
+        warnings.append("新旧来源链接不同，请先核实来源；工具不据此认定为同一单集。")
+    return {
+        "schema_version": 1, "old": old, "new": new,
+        "same_episode_id": same_id, "same_source_url": same_source,
+        "effective_series_changed": changed,
+        "requires_series_review": action != "none",
+        "override_action": action, "message": message, "warnings": warnings,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--content-dir", type=Path, default=ROOT / "content" / "episodes")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "output" / "site")
     parser.add_argument("--series-catalog", type=Path, help="Optional maintained series catalog JSON")
     parser.add_argument("--series-overrides", type=Path, default=ROOT / "content" / "series-overrides.json")
+    parser.add_argument("--check-replacement", type=int, nargs=2, metavar=("OLD_ISSUE", "NEW_ISSUE"),
+                        help="Only report classification before/after an Issue replacement; write nothing")
     args = parser.parse_args(argv)
     try:
-        target = build_public_site(load_records(args.content_dir), args.output_dir,
-                                   series_catalog=load_catalog(args.series_catalog),
-                                   series_overrides=load_series_overrides(args.series_overrides))
+        records = load_records(args.content_dir)
+        catalog = load_catalog(args.series_catalog)
+        overrides = load_series_overrides(args.series_overrides)
+        if args.check_replacement:
+            report = replacement_report(records, *args.check_replacement, catalog, overrides)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0
+        target = build_public_site(records, args.output_dir,
+                                   series_catalog=catalog, series_overrides=overrides)
     except (OSError, ValueError) as error:
-        print(f"Public site build failed: {error}", file=sys.stderr)
+        operation = "Replacement check" if args.check_replacement else "Public site build"
+        print(f"{operation} failed: {error}", file=sys.stderr)
         return 2
     print(target)
     return 0
