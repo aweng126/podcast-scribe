@@ -110,7 +110,12 @@ def test_retry_discards_partial_segments_and_reuses_ids_safely(request_state, in
     [segment(), segment(), done("第一句。第一句。")],
     [{k: v for k, v in segment().items() if k != "id"}, done()],
     [{k: v for k, v in segment().items() if k != "speaker"}, done()],
-    [segment(text=" "), done("")],
+    [segment(text=None), done("")],
+    [segment(text=" ", end=6), done("")],
+    [segment(text=" ", speaker=123), done("")],
+    [segment(text=" "), segment(), done()],
+    [segment(text=" ", start=2, end=3), segment("seg-2"), done()],
+    [segment(text=" "), done("有正文却没有带时间戳的文本")],
     [segment(), done("不同的全文。")],
     [segment(), {"type": "transcript.text.done"}],
     [done("有正文却没有已完成段落")],
@@ -145,6 +150,34 @@ def test_empty_completed_stream_is_valid_for_a_silent_chunk(request_state):
     state.streams = [stream]
     assert request(state) == {"text": "", "segments": []}
     assert stream.closed
+
+
+@pytest.mark.parametrize("blank", ["", " \n\t"])
+def test_blank_segments_preserve_raw_events_without_retrying(request_state, blank):
+    state = request_state
+    events = [segment("empty-first", blank, 0, 0.25),
+              segment("spoken-first", "第一句。", 0.25, 1),
+              segment("empty-middle", blank, 1, 2),
+              segment("spoken-last", "第二句。", 2, 4),
+              segment("empty-last", blank, 4, 5)]
+    stream = FakeStream([*events, done("第一句。第二句。")])
+    state.streams = [stream]
+    result = request(state)
+    assert result["segments"] == [{k: v for k, v in event.items() if k != "type"}
+                                  for event in events]
+    assert [row["text"] for row in module._rows(result, 5)] == ["第一句。", "第二句。"]
+    assert stream.closed and stream.audio.closed
+    assert len(state.calls) == 1 and state.sleeps == []
+
+
+def test_all_blank_segments_require_matching_done(request_state):
+    state = request_state
+    stream = FakeStream([segment(text=" \n", end=5), done("")])
+    state.streams = [stream]
+    result = request(state)
+    assert len(result["segments"]) == 1
+    assert module._rows(result, 5) == []
+    assert len(state.calls) == 1 and state.sleeps == []
 
 
 def test_interrupted_stream_never_writes_success_cache_and_can_resume(request_state, monkeypatch):

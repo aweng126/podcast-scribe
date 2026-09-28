@@ -157,8 +157,10 @@ def _stream_payload(stream, duration: float | None) -> dict:
             if not all(key in data for key in ("start", "end", "speaker", "text")):
                 raise ContentError("转写流段落字段不完整，未计为成功")
             row = {key: data[key] for key in ("id", "start", "end", "speaker", "text")}
-            if not _rows({"segments": [row]}, duration):
-                raise ContentError("转写流段落正文为空，未计为成功")
+            # Empty text is still a segment event. Validate its timing and
+            # speaker, retain it for ID/order and terminal-text checks, then
+            # let _rows omit it from the normalized reading transcript.
+            _rows({"segments": [row]}, duration)
             if segments and row["start"] < segments[-1]["start"]:
                 raise ContentError("转写流段落未按时间排序，未计为成功")
             identifiers.add(ident)
