@@ -101,6 +101,8 @@ def repair_subtitles(document: dict, assessment: dict, audio: Path, work: Path,
         repairs.append({"start": start, "end": end, "segments": len(segments),
                         "replaced_cue_ids": [c["id"] for c in replaced],
                         "transcription_cache": info.get("transcription_cache")})
+        if "transcription_usage" in info:
+            repairs[-1]["transcription_usage"] = info["transcription_usage"]
     rows.sort(key=lambda row: (row["start"], row["end"]))
     segments, speakers = normalize_segments(rows)
     return segments, speakers, repairs

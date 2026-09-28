@@ -15,6 +15,7 @@ from .audio_chunks import (MAX_CHUNK_SECONDS, MAX_UPLOAD_BYTES, analyze_audio,
                            extract_audio, ffmpeg_binary, plan_chunks, prepare_audio)
 from .cache_lifecycle import register_media, touch_media_tree, was_removed
 from .model import ContentError, write_json
+from .transcription_usage import UsageReport
 from .transcripts import normalize_segments
 
 MODEL = "gpt-4o-transcribe-diarize"
@@ -110,7 +111,7 @@ def _legacy_cache(source: Path, cache_dir: Path, language: str):
         return None
     touch_media_tree(path.parent)
     payload = _read(path)
-    return normalize_segments(_rows(payload)), payload.get("duration"), path
+    return normalize_segments(_rows(payload)), payload.get("duration"), path, payload
 
 
 def _load_manifest(work: Path, source_hash: str, config: dict) -> dict | None:
@@ -190,7 +191,8 @@ def _stream_payload(stream, duration: float | None) -> dict:
 
 
 def _request(client, audio_path: Path, language: str, references: list[dict], work: Path,
-             duration: float | None = None) -> dict:
+             duration: float | None = None, *, usage: UsageReport | None = None,
+             chunk_id: str = "") -> dict:
     extra = {}
     if references:
         extra = {"extra_body": {
@@ -199,14 +201,21 @@ def _request(client, audio_path: Path, language: str, references: list[dict], wo
                 (work / ref["file"]).read_bytes()).decode("ascii") for ref in references],
         }}
     for attempt in range(MAX_ATTEMPTS):
+        submitted = False
         try:
             with audio_path.open("rb") as audio:
+                if usage is not None:
+                    usage.attempt(chunk_id, duration, references)
+                submitted = True
                 stream = client.audio.transcriptions.create(
                     file=audio, model=MODEL, response_format="diarized_json",
                     chunking_strategy="auto", language=language, stream=True, **extra,
                 )
                 try:
-                    return _stream_payload(stream, duration)
+                    payload = _stream_payload(stream, duration)
+                    if usage is not None:
+                        usage.success(payload)
+                    return payload
                 finally:
                     try:
                         stream.close()
@@ -215,6 +224,8 @@ def _request(client, audio_path: Path, language: str, references: list[dict], wo
                         # second billable request or hide the original failure.
                         pass
         except Exception as exc:
+            if submitted and usage is not None:
+                usage.failed()
             status = getattr(exc, "status_code", None)
             temporary = status in (408, 409, 429) or (isinstance(status, int) and status >= 500)
             temporary = temporary or isinstance(exc, _IncompleteStream) or type(exc).__name__ in (
@@ -335,24 +346,63 @@ def transcribe_audio(source: Path, cache_dir: Path, *, language: str = "zh",
     source, cache_dir = Path(source), Path(cache_dir)
     if not source.is_file():
         raise ContentError(f"音视频文件不存在：{source}")
+    usage = UsageReport(MODEL)
     old = _legacy_cache(source, cache_dir, language)
     if old is not None:
-        normalized, duration, path = old
+        normalized, duration, path, payload = old
+        duration = duration or max(row["end"] for row in normalized[0])
+        usage.reuse(payload, duration)
         if metadata is not None:
-            metadata.update(duration_seconds=duration or max(row["end"] for row in normalized[0]),
+            metadata.update(duration_seconds=duration,
                             transcription_cache=str(path), legacy_cache=True,
                             forced_boundary_seconds=[], unmatched_speaker_labels=0)
+        with _cache_lock(path.parent):
+            _save_usage(usage, path.parent, metadata)
         return normalized
     source_hash, config = _sha256(source), _configuration(language)
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
     work = cache_dir / hashlib.sha256(f"{source_hash}:{config_hash}".encode()).hexdigest()
     with _cache_lock(work):
-        return _transcribe_work(source, work, source_hash, config, config_hash, metadata,
-                                allow_empty=allow_empty)
+        try:
+            return _transcribe_work(source, work, source_hash, config, config_hash, metadata,
+                                    usage=usage, allow_empty=allow_empty)
+        finally:
+            _save_usage(usage, work, metadata)
+
+
+def _save_usage(usage: UsageReport, work: Path, metadata: dict | None):
+    report = usage.snapshot()
+    if metadata is not None:
+        metadata["transcription_usage"] = report
+    try:
+        write_json(work / "usage.json", report)
+    except (OSError, ValueError, TypeError, OverflowError):
+        # Accounting must never hide a paid result or the actual request error.
+        print("本次转写用量报告无法写入缓存；接口成功响应仍按原流程保留。", file=sys.stderr)
+    current, cached = report["current_run"], report["reused_cache"]
+    failed_note = f"失败尝试 {current['failed_attempts']} 次的用量未知；" if current['failed_attempts'] else ""
+    print(f"本次转写用量：新增 {current['requested_chunks']} 片 / "
+          f"{current['requested_audio_seconds'] / 60:.2f} 分钟；复用 {cached['chunks']} 片；"
+          f"请求 {current['request_attempts']} 次（重试 {current['retry_attempts']} 次）。"
+          f"{failed_note}非账单估算。报告：{work / 'usage.json'}", file=sys.stderr)
+
+
+def _complete_cache_usage(usage: UsageReport, manifest: dict, work: Path):
+    """Missing historical usage must not invalidate an already checked final."""
+    for chunk in manifest["chunks"]:
+        path = work / "chunks" / f"{chunk['id']}.json"
+        payload = None
+        try:
+            if chunk.get("response_sha256") and _sha256(path) == chunk["response_sha256"]:
+                payload = _read(path).get("response")
+        except (OSError, ContentError):
+            pass
+        usage.reuse(payload, chunk["end"] - chunk["start"])
 
 
 def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
                      config_hash: str, metadata: dict | None, *,
+                     usage: UsageReport,
                      allow_empty: bool = False) -> tuple[list[dict], list[dict]]:
     language = config["language"]
     touch_media_tree(work)
@@ -363,6 +413,7 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
             raise ContentError("完整转写缓存校验失败，请保留缓存并检查文件")
         final = _read(final_path)
         _rows(final, manifest["duration"])
+        _complete_cache_usage(usage, manifest, work)
         _metadata(metadata, manifest, work, final["segments"])
         return _normalized(final["segments"], multiple_chunks=len(manifest["chunks"]) > 1,
                            allow_empty=allow_empty)
@@ -419,10 +470,13 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
                     write_json(work / "manifest.json", manifest)
                     if client is None:
                         client = stack.enter_context(_new_client())
-                    payload = _request(client, path, language, references, work, chunk["end"] - chunk["start"])
+                    payload = _request(client, path, language, references, work, chunk["end"] - chunk["start"],
+                                       usage=usage, chunk_id=chunk["id"])
                     _rows(payload, chunk["end"] - chunk["start"])
                     write_json(response_path, {"context": context, "response": payload})
                 rows = _rows(payload, chunk["end"] - chunk["start"])
+                if cached:
+                    usage.reuse(payload, chunk["end"] - chunk["start"])
                 known = {ref["name"]: ref["source_label"] for ref in references}
                 mapped = []
                 left_forced = index > 0 and manifest["chunks"][index - 1]["boundary"] == "forced"

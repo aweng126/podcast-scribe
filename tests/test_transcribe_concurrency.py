@@ -43,7 +43,7 @@ def _run_mock_cli(argv, entered, release, calls, results):
         def __enter__(self): return self
         def __exit__(self, *args): pass
 
-    def request(*args):
+    def request(*args, **kwargs):
         with calls.get_lock():
             calls.value += 1
         entered.set()

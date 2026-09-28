@@ -176,3 +176,73 @@ def test_invalid_progress_input_does_not_partially_save_the_manuscript(manuscrip
     assert main(["edit", str(manuscript), "--edits", str(patch), *options]) == 2
     assert capsys.readouterr().err and manuscript.read_bytes() == before
     assert not (manuscript.parent / "history").exists()
+
+
+def reported_usage(*, requested=0, cached=0, seconds=0):
+    from podcast_scribe.transcription_usage import merge_reports
+    report = merge_reports([])
+    report['current_run'].update(requested_chunks=requested, requested_audio_seconds=seconds,
+                                 submitted_audio_seconds=seconds, request_attempts=requested,
+                                 successful_responses=requested)
+    report['reused_cache'].update(chunks=cached, audio_seconds=10 * cached,
+                                  successful_responses=cached)
+    return report
+
+
+def test_subtitle_only_records_zero_api_activity(source, capsys):
+    assert main(['ingest', URL]) == 0
+    episode = load_episode(Path(capsys.readouterr().out.strip()))
+    usage = episode['transcription']['usage']
+    assert usage['current_run']['request_attempts'] == 0
+    assert usage['current_run']['requested_audio_seconds'] == 0
+    assert source['asr'] == source['audio'] == 0
+
+
+@pytest.mark.parametrize('entry', ['bilibili', 'local'])
+def test_audio_usage_survives_import_and_is_available_to_status(source, tmp_path, capsys, monkeypatch, entry):
+    from podcast_scribe import transcribe
+    usage = reported_usage(requested=1, cached=2, seconds=120)
+
+    def asr(*args, **kwargs):
+        kwargs['metadata'].update(duration_seconds=120, transcription_usage=deepcopy(usage))
+        return normalize_segments([{'start': 0, 'end': 120, 'text': '接口用量合成测试。', 'speaker': 'A'}])
+
+    monkeypatch.setattr(transcribe, 'transcribe_audio', asr)
+    if entry == 'bilibili':
+        args = ['ingest', URL, '--transcript-source', 'audio']
+    else:
+        audio = tmp_path / 'input.fake'
+        audio.write_bytes(b'synthetic input')
+        args = ['transcribe', str(audio)]
+    assert main(args) == 0
+    path = Path(capsys.readouterr().out.strip())
+    assert load_episode(path)['transcription']['usage'] == usage
+    assert main(['status', str(path)]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status['transcription_usage'] == usage
+    assert status['transcription_usage']['current_run']['request_attempts'] == 1
+
+
+def test_partial_subtitle_repair_aggregates_new_and_cached_usage_separately(source, capsys, monkeypatch):
+    from podcast_scribe import subtitle_repair
+    del source['document']['cues'][10:13]
+    first = reported_usage(requested=1, seconds=5)
+    second = reported_usage(cached=1)
+
+    def repair(*args, **kwargs):
+        segments, speakers = normalize_segments([
+            {'start': 0, 'end': 120, 'text': '局部补齐后的合成正文。', 'speaker': None}])
+        return segments, speakers, [
+            {'start': 50, 'end': 55, 'transcription_usage': first},
+            {'start': 55, 'end': 65, 'transcription_usage': second},
+        ]
+
+    monkeypatch.setattr(subtitle_repair, 'repair_subtitles', repair)
+    assert main(['ingest', URL]) == 0
+    episode = load_episode(Path(capsys.readouterr().out.strip()))
+    usage = episode['transcription']['usage']
+    assert episode['transcription']['source'] == 'subtitles+audio'
+    assert usage['current_run']['request_attempts'] == 1
+    assert usage['current_run']['requested_audio_seconds'] == 5
+    assert usage['reused_cache']['chunks'] == 1
+    assert usage['reused_cache']['audio_seconds'] == 10

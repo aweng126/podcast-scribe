@@ -340,3 +340,20 @@ def test_missing_or_wrong_asr_duration_cannot_replace_subtitles(offline, reporte
     with pytest.raises(ContentError, match="时长"):
         offline.run(source, assessment((10, 20)))
     assert source == original
+
+
+def test_partial_transcription_keeps_each_ranges_usage(offline):
+    from podcast_scribe.transcription_usage import merge_reports
+    report = merge_reports([])
+    report['reused_cache']['chunks'] = 1
+
+    def cached(*args, **kwargs):
+        result = offline.default_transcribe(*args, **kwargs)
+        kwargs['metadata']['transcription_usage'] = deepcopy(report)
+        return result
+
+    offline.transcribe.side_effect = cached
+    source = document([('left', 0, 10, '前文'), ('right', 30, 100, '后文')])
+    _, _, repairs = offline.run(source, assessment((10, 20), (20, 30)))
+    assert len(repairs) == 2
+    assert all(r['transcription_usage'] == report for r in repairs)

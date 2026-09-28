@@ -289,6 +289,7 @@ def _run(args):
                 raise ContentError(f"字幕不满足完整导入条件：{reason}。未请求音频 API；可使用 auto 局部补齐或 audio 转写。")
             source = "audio"
             repairs = []
+            audio_metadata = {}
             if strategy != "audio" and assessment["usable"]:
                 segments, speakers = segments_from_subtitles(subtitle_document)
                 source = "subtitles"
@@ -301,13 +302,20 @@ def _run(args):
                         duration_seconds=metadata["duration_seconds"], language=args.language)
                     source = "subtitles+audio"
                 else:
-                    audio_metadata = {}
                     segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language,
                                                          metadata=audio_metadata)
                     metadata["duration_seconds"] = max(metadata.get("duration_seconds") or 0,
                                                        audio_metadata.get("duration_seconds") or 0)
             metadata["transcription"] = {"requested_source": args.transcript_source, "source": source,
                                          "subtitle_assessment": assessment, "repairs": repairs}
+            from .transcription_usage import merge_reports
+            usage = audio_metadata.get("transcription_usage")
+            if source == "subtitles":
+                usage = merge_reports([])
+            elif repairs and all(isinstance(r.get("transcription_usage"), dict) for r in repairs):
+                usage = merge_reports([r["transcription_usage"] for r in repairs])
+            if usage is not None:
+                metadata["transcription"]["usage"] = usage
             print(json.dumps({"transcript_source": source,
                               "audio_transcription": "skipped" if source == "subtitles" else "ranges" if repairs else "full_or_cached",
                               "repair_ranges": [{"start": r["start"], "end": r["end"]} for r in repairs],
@@ -348,6 +356,9 @@ def _run(args):
                         "input_identity": target["identity"],
                         "source": {"platform": "bilibili" if "bilibili.com" in target["source_url"] else "local",
                                    "url": target["source_url"], "author": ""}}
+            if "transcription_usage" in audio_metadata:
+                metadata["transcription"] = {"requested_source": "audio", "source": "audio",
+                                             "usage": audio_metadata["transcription_usage"]}
             _save_new(args, metadata, segments, speakers)
     elif args.command == "status":
         from .editing import compact_json, editing_status
@@ -355,6 +366,8 @@ def _run(args):
         episode = load_episode(args.episode)
         result = editing_status(episode)
         result["editing_progress"] = progress_summary(episode, load_progress(args.episode, episode))
+        if "usage" in episode.get("transcription", {}):
+            result["transcription_usage"] = episode["transcription"]["usage"]
         print(compact_json(result), end="")
     elif args.command == "series-list":
         from .series import load_catalog

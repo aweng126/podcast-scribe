@@ -47,8 +47,9 @@ def mocked_pipeline(monkeypatch, tmp_path):
         events = [{"type": "transcript.text.segment", "id": f"part-{i}", **row}
                   for i, row in enumerate(result.get("segments", []))]
         done = {"type": "transcript.text.done", "text": result.get("text", "".join(row["text"] for row in result.get("segments", [])))}
-        if "duration" in result:
-            done["duration"] = result["duration"]
+        for key in ("duration", "usage"):
+            if key in result:
+                done[key] = result[key]
         class Stream:
             def __iter__(self): return iter([*events, done])
             def close(self): pass
@@ -151,7 +152,10 @@ def test_failure_resumes_only_pending_chunks_and_keeps_global_speakers(mocked_pi
     monkeypatch.delenv("OPENAI_API_KEY")
     cached_metadata = {}
     assert run(state, metadata=cached_metadata) == (segments, people)
-    assert len(state["calls"]) == 4 and cached_metadata == metadata
+    assert len(state["calls"]) == 4
+    assert cached_metadata.pop("transcription_usage")["current_run"]["request_attempts"] == 0
+    assert metadata.pop("transcription_usage")["current_run"]["request_attempts"] == 2
+    assert cached_metadata == metadata
 
 
 def test_empty_chunk_is_successful_and_reused(mocked_pipeline):
@@ -246,6 +250,117 @@ def test_transient_retry_is_bounded_and_auth_errors_not_retried(mocked_pipeline)
         run(state)
     assert len(state["calls"]) == 3
     assert state["sleeps"] == [1, 2]
+
+
+def test_usage_separates_new_requests_retries_and_historical_cache(mocked_pipeline, monkeypatch):
+    state = mocked_pipeline
+    state["duration"] = 5
+    failure = RuntimeError("provider error must-not-leak-credentials")
+    failure.status_code = 503
+    usage = {"type": "tokens", "input_tokens": 20, "output_tokens": 5, "total_tokens": 25,
+             "input_token_details": {"audio_tokens": 18, "text_tokens": 2}}
+    state["results"] = [failure, {"segments": [speech()], "usage": usage}]
+    metadata = {}
+    run(state, metadata=metadata)
+    report = metadata["transcription_usage"]
+    current = report["current_run"]
+    assert (current["requested_chunks"], current["requested_audio_seconds"]) == (1, 5)
+    assert (current["submitted_audio_seconds"], current["submitted_reference_seconds"]) == (10, 0)
+    assert (current["request_attempts"], current["retry_attempts"], current["failed_attempts"]) == (2, 1, 1)
+    assert (current["successful_responses"], current["missing_usage_responses"]) == (1, 0)
+    assert current["reported_usage"]["tokens"]["total_tokens"] == 25
+    assert report["reused_cache"]["chunks"] == 0
+    path, _ = manifest(state)
+    usage_path = path.parent / "usage.json"
+    assert json.loads(usage_path.read_text()) == report
+    assert "must-not-leak" not in usage_path.read_text()
+    assert report["billing_total"] is None and report["agent_tokens"] is None
+
+    monkeypatch.delenv("OPENAI_API_KEY")
+    run(state, metadata=metadata)
+    cached = metadata["transcription_usage"]
+    assert cached["current_run"]["request_attempts"] == 0
+    assert cached["current_run"]["reported_usage"] == {}
+    assert cached["reused_cache"]["reported_usage"] == current["reported_usage"]
+    assert cached["reused_cache"]["chunks"] == 1
+    assert len(state["calls"]) == 2
+    assert json.loads(usage_path.read_text()) == cached
+
+
+def test_usage_report_survives_failure_and_partial_resume(mocked_pipeline):
+    state = mocked_pipeline
+    failure = RuntimeError("unauthorized")
+    failure.status_code = 401
+    state["results"] = [{"segments": [speech()], "usage": {"type": "duration", "seconds": 900}}, failure]
+    metadata = {}
+    with pytest.raises(ContentError, match="HTTP 401"):
+        run(state, metadata=metadata)
+    failed = metadata["transcription_usage"]["current_run"]
+    assert (failed["request_attempts"], failed["failed_attempts"], failed["successful_responses"]) == (2, 1, 1)
+    assert failed["reported_usage"] == {"duration": {"seconds": 900}}
+    path, _ = manifest(state)
+    assert json.loads((path.parent / "usage.json").read_text()) == metadata["transcription_usage"]
+    state["results"] = [{"segments": [speech("voice-0001")]},
+                        {"segments": [speech(end=1)], "usage": {"type": "duration", "seconds": 5}}]
+    run(state, metadata=metadata)
+    report = metadata["transcription_usage"]
+    current, cached = report["current_run"], report["reused_cache"]
+    assert (current["requested_chunks"], current["requested_audio_seconds"]) == (2, 905)
+    assert current["submitted_reference_seconds"] == pytest.approx(7.2)
+    assert current["request_attempts"] == 2 and current["failed_attempts"] == 0
+    assert current["missing_usage_responses"] == 1
+    assert current["reported_usage"] == {"duration": {"seconds": 5}}
+    assert (cached["chunks"], cached["audio_seconds"]) == (1, 900)
+    assert cached["reported_usage"] == {"duration": {"seconds": 900}}
+
+
+@pytest.mark.parametrize("damage", ["missing", "not_object", "invalid_usage"])
+def test_complete_final_can_report_missing_historical_usage_without_new_request(mocked_pipeline, monkeypatch, damage):
+    state = mocked_pipeline
+    state["duration"] = 5
+    state["results"] = [{"segments": [speech()], "usage": {"type": "duration", "seconds": 5}}]
+    expected = run(state)
+    path, saved = manifest(state)
+    response_path = path.parent / "chunks/chunk-0001.json"
+    if damage == "missing":
+        response_path.unlink()
+    else:
+        if damage == "not_object":
+            response_path.write_text("[]")
+        else:
+            payload = json.loads(response_path.read_text())
+            payload["response"]["usage"] = {"type": "duration", "seconds": 10 ** 1000}
+            write_json(response_path, payload)
+        saved["chunks"][0]["response_sha256"] = module._sha256(response_path)
+        write_json(path, saved)
+    monkeypatch.delenv("OPENAI_API_KEY")
+    metadata = {}
+    assert run(state, metadata=metadata) == expected
+    report = metadata["transcription_usage"]
+    assert report["current_run"]["request_attempts"] == 0
+    assert report["reused_cache"]["missing_usage_responses"] == 1
+    assert report["reused_cache"]["reported_usage"] == {}
+    assert len(state["calls"]) == 1
+
+
+def test_usage_report_write_error_does_not_hide_successful_paid_response(mocked_pipeline, monkeypatch):
+    state = mocked_pipeline
+    state["duration"] = 5
+    state["results"] = [{"segments": [speech()]}]
+    original = module.write_json
+
+    def fail_usage(path, payload):
+        if path.name == "usage.json":
+            raise ValueError("synthetic usage serialization error")
+        return original(path, payload)
+
+    monkeypatch.setattr(module, "write_json", fail_usage)
+    segments, _ = run(state)
+    assert segments[0]["text"] == "合成接口测试文字"
+    path, saved = manifest(state)
+    assert saved["status"] == "complete"
+    assert (path.parent / "chunks/chunk-0001.json").is_file()
+    assert len(state["calls"]) == 1
 
 
 def test_legacy_success_cache_needs_no_key_or_conversion(mocked_pipeline, monkeypatch):
