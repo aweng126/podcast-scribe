@@ -65,6 +65,8 @@ def _save_new(args, metadata, segments, speakers):
     ep["series"] = series
     if "input_identity" in metadata:
         ep["input_identity"] = metadata["input_identity"]
+    if "transcription" in metadata:
+        ep["transcription"] = metadata["transcription"]
     if getattr(args, "demo", False):
         ep["is_demo"] = True
     save_new_episode(args.output, ep)
@@ -100,10 +102,12 @@ def parser():
     p.add_argument("url")
     p.add_argument("--output", type=Path)
     _cookie_options(p)
-    p = sub.add_parser("ingest", help="获取 B站音频并调用云端说话人转写")
+    p = sub.add_parser("ingest", help="优先采用 B站字幕；必要时调用音频转写")
     p.add_argument("url")
     p.add_argument("--cache", type=Path, default=Path("data/cache"))
     p.add_argument("--language", default="zh")
+    p.add_argument("--transcript-source", choices=("auto", "subtitles", "audio"), default="auto",
+                   help="auto 优先字幕、少量缺口局部补齐，否则音频转写；subtitles 仅字幕，audio 强制音频")
     _cookie_options(p)
     _series(p); _output(p); _review_mode(p)
     p = sub.add_parser("transcribe", help="将本地音视频发送到 OpenAI 转写，产生 API 费用")
@@ -125,6 +129,7 @@ def parser():
     p.add_argument("episode", type=Path)
     p.add_argument("--edits", type=Path, required=True)
     p.add_argument("--batch", type=Path, help="校验 batch 的版本与内容摘要，仅允许修改本批目标段落")
+    p.add_argument("--note", help="本批短笔记（最多1200字符），仅配合 --batch；保存在本地续编记录")
     p = sub.add_parser("complete", help="记录自动整理、用户接受或来源精校完成依据")
     p.add_argument("episode", type=Path)
     p.add_argument("--basis", choices=sorted(REVIEW_BASES),
@@ -140,14 +145,18 @@ def parser():
     p.add_argument("--evidence-url", help="Agent 已核实节目归属的官方来源链接；命令不代替核实")
     p.add_argument("--unclassified", action="store_true", help="无法确认归属时明确保留未分类")
     p.add_argument("--catalog", type=Path)
-    p = sub.add_parser("batch", help="按字符预算读取完整段落，默认跳过已校对段落")
+    p = sub.add_parser("batch", help="按字符预算读取完整段落，默认复用有效整理进度并跳过已校对段落")
     p.add_argument("episode", type=Path)
     p.add_argument("--max-chars", type=int, default=6000, help="完整紧凑 JSON 的字符上限，默认 6000")
-    p.add_argument("--after", help="从此稳定段落 ID 之后续读")
+    p.add_argument("--after", help="从此稳定段落 ID 之后读取；指定时不跳过已登记的 edited 段")
     p.add_argument("--include-reviewed", action="store_true", help="同时读取已校对段落")
     p.add_argument("--context-chars", type=int, default=300, help="前后各最多保留的上下文字符数，默认 300")
     p.add_argument("--raw", action="store_true", help="按需读取原始转写，替代当前正文视图")
     p.add_argument("--output", type=Path, help="另存同一紧凑 JSON，供 edit --batch 校验")
+    p = sub.add_parser("editing-notes", help="分页读取本地批次笔记，不读取全文或编辑历史")
+    p.add_argument("episode", type=Path)
+    p.add_argument("--after", type=int, default=0, help="上一页返回的笔记序号")
+    p.add_argument("--max-chars", type=int, default=6000)
     p = sub.add_parser("check-subtitles", help="提取字幕并与现稿对照；不修改正文或校对状态")
     p.add_argument("episode", type=Path)
     source = p.add_mutually_exclusive_group()
@@ -229,21 +238,53 @@ def run(args):
             metadata["input_identity"] = target["identity"]
             work = args.cache / target["id"]
             write_json(work / "metadata.json", metadata)
-            # Subtitle evidence is optional, and remains separate from the ASR
-            # source and review states. Query once before the paid audio step.
+            # Source choice never marks the resulting text or speakers reviewed.
             try:
                 subtitle_document = fetch_subtitles(target["url"], work, **source_options)
             except ContentError as exc:
                 subtitle_document = {"schema_version": 1, "status": "unavailable", "cues": [],
                                      "source": {"kind": "bilibili", "url": target["url"]},
                                      "reason": str(exc)}
-            audio = fetch_audio(target["url"], work, **source_options)
-            audio_metadata = {}
-            segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language,
-                                                 metadata=audio_metadata)
-            metadata["duration_seconds"] = max(metadata.get("duration_seconds") or 0,
-                                               audio_metadata.get("duration_seconds") or 0)
+            from .subtitle_ingest import assess_subtitles, segments_from_subtitles
+            assessment = assess_subtitles(subtitle_document, metadata.get("duration_seconds"),
+                                           language=args.language)
+            strategy = args.transcript_source
+            if strategy == "auto" and args.review_mode == "precise":
+                strategy = "audio"
+            if strategy == "subtitles" and not assessment["usable"]:
+                reason = "；".join(item["message"] for item in assessment["reasons"])
+                raise ContentError(f"字幕不满足完整导入条件：{reason}。未请求音频 API；可使用 auto 局部补齐或 audio 转写。")
+            source = "audio"
+            repairs = []
+            if strategy != "audio" and assessment["usable"]:
+                segments, speakers = segments_from_subtitles(subtitle_document)
+                source = "subtitles"
+            else:
+                audio = fetch_audio(target["url"], work, **source_options)
+                if strategy == "auto" and assessment["repairable"]:
+                    from .subtitle_repair import repair_subtitles
+                    segments, speakers, repairs = repair_subtitles(
+                        subtitle_document, assessment, audio, work, args.cache / "asr",
+                        duration_seconds=metadata["duration_seconds"], language=args.language)
+                    source = "subtitles+audio"
+                else:
+                    audio_metadata = {}
+                    segments, speakers = transcribe_audio(audio, args.cache / "asr", language=args.language,
+                                                         metadata=audio_metadata)
+                    metadata["duration_seconds"] = max(metadata.get("duration_seconds") or 0,
+                                                       audio_metadata.get("duration_seconds") or 0)
+            metadata["transcription"] = {"requested_source": args.transcript_source, "source": source,
+                                         "subtitle_assessment": assessment, "repairs": repairs}
+            print(json.dumps({"transcript_source": source,
+                              "audio_transcription": "skipped" if source == "subtitles" else "ranges" if repairs else "full_or_cached",
+                              "repair_ranges": [{"start": r["start"], "end": r["end"]} for r in repairs],
+                              "subtitle_reasons": assessment["reasons"],
+                              "message": "仅生成未经整理的草稿；字幕结构合格不代表准确，人物归属仍需处理。"},
+                             ensure_ascii=False), file=sys.stderr)
             _save_new(args, metadata, segments, speakers)
+            if source in {"subtitles", "subtitles+audio"}:
+                print("正文采用来源字幕，未把同源部分的自我对照记作独立核验；补齐范围已记录。", file=sys.stderr)
+                return 0
             from .subtitle_review import write_subtitle_report
             try:
                 result = write_subtitle_report(load_episode(args.output), subtitle_document)
@@ -277,7 +318,11 @@ def run(args):
             _save_new(args, metadata, segments, speakers)
     elif args.command == "status":
         from .editing import compact_json, editing_status
-        print(compact_json(editing_status(load_episode(args.episode))), end="")
+        from .editing_progress import load_progress, progress_summary
+        episode = load_episode(args.episode)
+        result = editing_status(episode)
+        result["editing_progress"] = progress_summary(episode, load_progress(args.episode, episode))
+        print(compact_json(result), end="")
     elif args.command == "series-list":
         from .series import load_catalog
         print(json.dumps(load_catalog(args.catalog), ensure_ascii=False, indent=2))
@@ -321,8 +366,14 @@ def run(args):
                               if changed else "系列归属未变化，保留已有文件。"}, ensure_ascii=False, indent=2))
     elif args.command == "batch":
         from .editing import compact_json, read_batch
-        batch = read_batch(load_episode(args.episode), max_chars=args.max_chars, after=args.after,
-                           include_reviewed=args.include_reviewed, context_chars=args.context_chars, raw=args.raw)
+        from .editing_progress import load_progress, valid_skip_ids
+        episode = load_episode(args.episode)
+        progress = load_progress(args.episode, episode)
+        skip_ids = (valid_skip_ids(episode, progress)
+                    if args.after is None and not args.raw and not args.include_reviewed else set())
+        batch = read_batch(episode, max_chars=args.max_chars, after=args.after,
+                           include_reviewed=args.include_reviewed, context_chars=args.context_chars,
+                           raw=args.raw, skip_ids=skip_ids)
         content = compact_json(batch)
         if args.output:
             _new_destination(args.output)
@@ -330,6 +381,12 @@ def run(args):
             with args.output.open("x", encoding="utf-8") as stream:
                 stream.write(content)
         print(content, end="")
+    elif args.command == "editing-notes":
+        from .editing import compact_json
+        from .editing_progress import load_progress, read_notes
+        episode = load_episode(args.episode)
+        print(compact_json(read_notes(episode, load_progress(args.episode, episode),
+                                     after=args.after, max_chars=args.max_chars)), end="")
     elif args.command == "check-subtitles":
         from .subtitle_review import check_episode_subtitles
         result = check_episode_subtitles(args.episode, subtitle_file=args.file, video=args.video,
@@ -352,13 +409,22 @@ def run(args):
                 stream.write(content)
         print(content, end="")
     elif args.command == "edit":
-        before = load_episode(args.episode, for_edit=True)
+        from .defaults import destination_lock
+        from .editing import validate_batch_edits
+        from .editing_progress import load_progress, record_progress, validate_note
         edits = _read(args.edits)
-        if args.batch:
-            from .editing import validate_batch_edits
-            validate_batch_edits(before, edits, _read(args.batch))
-        after = apply_edits(before, edits)
-        _save_revision(args.episode, before, after)
+        batch = _read(args.batch) if args.batch else None
+        validate_note(args.note)
+        if args.note is not None and batch is None:
+            raise ContentError("批次笔记需要 --batch")
+        with destination_lock(args.episode):
+            before = load_episode(args.episode, for_edit=True)
+            load_progress(args.episode, before)
+            if batch is not None:
+                validate_batch_edits(before, edits, batch)
+            after = apply_edits(before, edits)
+            _save_revision(args.episode, before, after)
+            record_progress(args.episode, before, after, edits, batch, note=args.note)
         print(f"已保存草稿 r{after['revision']}：{args.episode.resolve()}")
     elif args.command == "complete":
         before = load_episode(args.episode, for_edit=True)

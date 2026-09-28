@@ -254,7 +254,10 @@ def _add_references(rows: list[dict], mapped: list[dict], references: list[dict]
         represented.add(label)
 
 
-def _normalized(rows: list[dict], *, multiple_chunks: bool) -> tuple[list[dict], list[dict]]:
+def _normalized(rows: list[dict], *, multiple_chunks: bool,
+                allow_empty: bool = False) -> tuple[list[dict], list[dict]]:
+    if not rows and allow_empty:
+        return [], []
     segments, people = normalize_segments(rows)
     for segment, row in zip(segments, rows):
         if row.get("boundary_review") or row.get("speaker_review"):
@@ -293,7 +296,8 @@ def _cache_lock(work: Path):
 
 
 def transcribe_audio(source: Path, cache_dir: Path, *, language: str = "zh",
-                     metadata: dict | None = None) -> tuple[list[dict], list[dict]]:
+                     metadata: dict | None = None,
+                     allow_empty: bool = False) -> tuple[list[dict], list[dict]]:
     source, cache_dir = Path(source), Path(cache_dir)
     if not source.is_file():
         raise ContentError(f"音视频文件不存在：{source}")
@@ -309,11 +313,13 @@ def transcribe_audio(source: Path, cache_dir: Path, *, language: str = "zh",
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
     work = cache_dir / hashlib.sha256(f"{source_hash}:{config_hash}".encode()).hexdigest()
     with _cache_lock(work):
-        return _transcribe_work(source, work, source_hash, config, config_hash, metadata)
+        return _transcribe_work(source, work, source_hash, config, config_hash, metadata,
+                                allow_empty=allow_empty)
 
 
 def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
-                     config_hash: str, metadata: dict | None) -> tuple[list[dict], list[dict]]:
+                     config_hash: str, metadata: dict | None, *,
+                     allow_empty: bool = False) -> tuple[list[dict], list[dict]]:
     language = config["language"]
     manifest = _load_manifest(work, source_hash, config)
     final_path = work / "transcription.json"
@@ -323,7 +329,8 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
         final = _read(final_path)
         _rows(final, manifest["duration"])
         _metadata(metadata, manifest, work, final["segments"])
-        return _normalized(final["segments"], multiple_chunks=len(manifest["chunks"]) > 1)
+        return _normalized(final["segments"], multiple_chunks=len(manifest["chunks"]) > 1,
+                           allow_empty=allow_empty)
     if not os.environ.get("OPENAI_API_KEY"):
         raise ContentError("未配置 OPENAI_API_KEY。可在运行环境中配置，或用 import 命令导入已有转写；请勿将密钥写入文稿或代码。")
     try:
@@ -411,4 +418,5 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
     manifest.update(status="complete", transcription_sha256=_sha256(final_path))
     write_json(work / "manifest.json", manifest)
     _metadata(metadata, manifest, work, combined)
-    return _normalized(combined, multiple_chunks=len(manifest["chunks"]) > 1)
+    return _normalized(combined, multiple_chunks=len(manifest["chunks"]) > 1,
+                       allow_empty=allow_empty)

@@ -47,7 +47,7 @@ def editing_status(episode: dict) -> dict:
 
 def read_batch(episode: dict, *, max_chars: int = 6000, after: str | None = None,
                include_reviewed: bool = False, context_chars: int = 300,
-               raw: bool = False) -> dict:
+               raw: bool = False, skip_ids: set[str] | None = None) -> dict:
     """Fit complete target segments and optional neighbor excerpts in one budget.
 
     The budget includes the entire compact JSON and its trailing newline. A
@@ -62,8 +62,10 @@ def read_batch(episode: dict, *, max_chars: int = 6000, after: str | None = None
     if after is not None and after not in indexes:
         raise ContentError(f"找不到续读段落：{after}")
     offset = indexes[after] + 1 if after is not None else 0
+    skipped = skip_ids or set()
     eligible = [i for i in range(offset, len(segments))
-                if include_reviewed or segments[i].get("review_status") != "reviewed"]
+                if segments[i]["id"] not in skipped
+                and (include_reviewed or segments[i].get("review_status") != "reviewed")]
     field = "raw_text" if raw else "text"
     digest = episode_digest(episode)
 
@@ -145,6 +147,9 @@ def validate_batch_edits(episode: dict, edits: dict, batch: dict) -> None:
             or any(not isinstance(s, dict) or not isinstance(s.get("id"), str) for s in targets)):
         raise ContentError("批次 targets 无效")
     target_ids = {s["id"] for s in targets}
+    episode_ids = {s["id"] for s in episode["segments"]}
+    if len(target_ids) != len(targets) or not target_ids <= episode_ids:
+        raise ContentError("批次 targets 包含重复或不存在的段落 ID")
     if not isinstance(edits, dict) or not isinstance(edits.get("segments", []), list):
         raise ContentError("编辑需要对象，segments 必须是列表")
     for patch in edits.get("segments", []):

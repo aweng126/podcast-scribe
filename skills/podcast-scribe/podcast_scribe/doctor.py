@@ -121,7 +121,7 @@ def check_environment(required=None) -> dict:
             issues = _pdf()
         if capability == "ocr":
             issues = _ocr()
-        if capability in {"transcribe", "ingest"}:
+        if capability == "transcribe":
             if transcribe_issues is None:
                 _, transcribe_issues = _dependency("openai", "openai")
                 if not os.environ.get("OPENAI_API_KEY", "").strip():
@@ -141,5 +141,5 @@ def check_environment(required=None) -> dict:
         "required": required,
         "capabilities": capabilities,
         "network": "not tested",
-        "cloud_transcription": "仅检查本地前置条件；未验证服务端、密钥有效性或模型权限，未调用 API。",
+        "cloud_transcription": "ingest 仅检查字幕优先入口；需要音频转写时另检查 transcribe。仅检查本地前置条件；未验证服务端、密钥有效性或模型权限，未调用 API。",
     }

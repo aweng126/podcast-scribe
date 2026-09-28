@@ -12,7 +12,7 @@ npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 
 该命令从 GitHub 安装 Skill 及配套文件，无需本项目发布 npm 包。`npx` 不安装 Python 依赖；首次运行时，Agent 会检查能力并按需初始化或复用环境，用户无需指定解释器或逐项安装依赖。
 
-音频转写需要通过运行环境或宿主密钥设置提供 `OPENAI_API_KEY`，不要把密钥粘贴到聊天、命令、文稿或 Git。仅处理已有转写并输出 Markdown、阅读站或分享文件时，无需 API 或第三方 Python 依赖。
+B站默认优先采用通过结构与覆盖检查的字幕；这一路径无需转写 API。需要局部或完整音频转写时，才通过运行环境或宿主密钥设置提供 `OPENAI_API_KEY`，不要把密钥粘贴到聊天、命令、文稿或 Git。仅处理已有转写并输出 Markdown、阅读站或分享文件时，无需 API 或第三方 Python 依赖。
 
 随后在任务工作区启动 Codex：
 
@@ -53,7 +53,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require ingest markdown pdf
 bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require import markdown pdf
 ```
 
-用户只要 Markdown 时从检查项中移除 `pdf`；已有单集文稿续编时无需重新检查云端转写能力。`doctor` 返回各能力的状态、问题和修复建议；全部满足时退出码为 `0`，否则为 `2`。由 Agent 补齐必要环境；确需用户提供的密钥、输入或权限不能猜测。默认 PDF 暂不可用时应说明阻塞，不能假称已导出。
+用户只要 Markdown 时从检查项中移除 `pdf`；已有单集文稿续编时无需重新检查云端转写能力。`ingest` 自检只检查字幕优先入口；默认字幕路径不因缺少密钥而阻断。实际转入音频路径且环境不足时，再执行 `doctor --require transcribe` 并补齐；本地音视频或明确要求音频、精准模式的新任务可直接检查 `transcribe`。`doctor` 返回各能力状态、问题和修复建议；全部满足时退出码为 `0`，否则为 `2`。实际需要的密钥、输入或权限不能猜测。默认 PDF 暂不可用时应说明阻塞，不能假称已导出。
 
 | 能力 | 本地前置条件 |
 | --- | --- |
@@ -63,7 +63,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require import markdown pdf
 | `subtitle-source` | `yt-dlp`；本地字幕文件对照只需 Python 标准库。 |
 | `ocr` | Tesseract、`chi_sim`/`eng` 语言包及 ffmpeg；按需检查。 |
 | `transcribe` | `openai` SDK、`OPENAI_API_KEY` 与可执行的 ffmpeg。 |
-| `ingest` | `transcribe` 的条件与 `yt-dlp`。 |
+| `ingest` | `yt-dlp`；只有转入音频路径时才需要 `transcribe` 的条件。 |
 
 完整依赖包含 `reportlab`、`openai`、`yt-dlp` 和提供内置 ffmpeg 的 `imageio-ffmpeg`。自检会运行 ffmpeg 版本命令，并实际检查 PDF 字体能否加载。`doctor` 不联网、不调用 API，不验证服务端权限、账户额度或密钥有效性。
 
@@ -86,11 +86,13 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" import '/path/to/transcript.json'
 
 这些命令默认使用自动模式，自动推导 ID、标题和输出路径，输出实际保存或复用的单集 JSON 路径。用户选择精准模式时传 `--review-mode precise`；复用已有稿件时以记录中的实际模式为准，需要切换则通过 `edit` 更新 `review.mode`。`ingest` 内部检查来源；需要单独查看元数据时才用 `inspect`。用户明确指定时才传 `--output`、`--id`、`--title` 等参数；节目系列由 Agent 核实后通过系列参数或 `classify` 保存。已有稿件保留人工修改；需要另存一份草稿时指定新的输出路径，转写仍可复用缓存。
 
-`ingest/transcribe` 将音频发送到配置的 OpenAI endpoint，并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。长音频自动转换、分片、逐片检查上传大小并保存成功缓存；中断后复用成功片段。跨片人物对应仍须校对，详见 [长音视频](long-audio.md)。不要把缓存复用当作校对完成。
+`ingest` 默认 `--transcript-source auto`，在自动模式先评估字幕：充分时直接生成字幕草稿，少量缺口或低置信片段只转写对应完整范围，其余情况使用完整音频。`--transcript-source subtitles` 严格只用合格字幕，不合格便停止，不调用音频 API；`audio` 强制音频。新任务的 `--review-mode precise` 配合默认 `auto` 会采用独立音频。用户无需选择这些参数；Agent 仅在用户明确改变来源要求时覆盖，规则见 [字幕来源选择](subtitles.md#字幕来源选择)。
+
+只有 `ingest` 实际使用音频路径或运行本地 `transcribe` 时，才向配置的 OpenAI endpoint 发送音频并产生接口费用。现用 `gpt-4o-transcribe-diarize`、`diarized_json`、`chunking_strategy=auto`。长音频自动分片并复用成功缓存；局部修补也复用对应范围的缓存，详见 [长音视频](long-audio.md)。声源标签、缓存命中和字幕结构合格都不代表已经校对。
 
 B站普通网页提取失败时，程序尝试正常公开元数据与播放 API，并核验指定分 P、权限、预览标记和时长。仍被拒绝时按下节处理，不能将简介冒充对话全文。
 
-`ingest` 会先采集可用字幕，转写后生成独立对照报告；无轨或字幕失败不阻断音频流程。已有稿件、本地字幕与画面字幕 OCR 见 [字幕辅助核验](subtitles.md)。报告只用于辅助核验，不自动修改正文或校对状态。
+来源选择、评估原因与局部修补范围会记录在本地文稿的 `transcription` 中。纯字幕草稿不会拿同一份字幕生成“独立核验”；混合草稿中的字幕原文也不能靠同源对照证明准确。已有稿件、本地字幕与画面字幕 OCR 见 [字幕辅助核验](subtitles.md)。对照报告不自动修改正文或校对状态，未知说话人仍需按证据处理。
 
 `ingest`、`transcribe`、`import` 生成的文稿仍是未经整理的草稿。获取或复用文稿后，继续执行：
 
@@ -99,7 +101,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" status data/my-episode/episode.json
 bash "$PS_SKILL_ROOT/scripts/run.sh" batch data/my-episode/episode.json --output output/my-episode/batch-001.json
 ```
 
-把示例路径替换成命令返回的实际文稿路径。`batch` 默认每批 6000 字符；Agent 按 [分批整理](editing.md) 保存笔记、提交增量编辑并覆盖全文，无需用户了解批次参数。用户只要原始草稿时才省略额外整理。
+把示例路径替换成命令返回的实际文稿路径。`batch` 默认每批 6000 字符；Agent 按 [分批整理](editing.md) 用 `edit --batch` 登记实际处理段落、用 `--note` 保存短笔记，默认下次读取会略过仍有效的自动整理进度。中断后先看 `status` 与 `editing-notes`，无需用户管理游标或批次参数。用户只要原始草稿时才省略额外整理。
 
 ## B站访问受限时
 
@@ -123,14 +125,14 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" inspect 'https://www.bilibili.com/video/BV1
 
 不要让用户把 cookies 内容粘贴到聊天。yt-dlp 会读取获授权浏览器的 cookie 库；供请求使用的内存 cookie 仅保留未过期的 `bilibili.com` 及其子域 cookies，不导出或写回登录态，也不把 cookie 值或文件路径写入日志、文稿、缓存元数据或分享文件。用户提供的 cookies 文件保持本地，不能随项目、音频或公开投稿上传。
 
-此流程参考 [bilibili-to-doc](https://github.com/programmerloverun/bilibili-to-doc) 使用浏览器登录态的方式；本项目仍默认获取音频并转写说话人，字幕仅辅助核对或由用户作为已有转写导入，没有人物标签时，按所选模式结合明确的节目结构与问答上下文处理归属，未核实名字保留匿名标签。cookies 格式和浏览器提取机制见 [yt-dlp 官方 FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)。
+此流程参考 [bilibili-to-doc](https://github.com/programmerloverun/bilibili-to-doc) 使用浏览器登录态的方式；字幕与音频获取沿用同一获授权范围。字幕没有人物标签时，按所选模式结合明确的节目结构、问答上下文及来源证据处理归属，不凭空造出说话人，未核实名字保留匿名标签。cookies 格式和浏览器提取机制见 [yt-dlp 官方 FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)。
 
 ## 校对与导出
 
 按 [数据约定](schema.md) 分批整理全文、保存人物对应与摘要章节后，自动模式按以下方式收尾并导出：
 
 ```sh
-bash "$PS_SKILL_ROOT/scripts/run.sh" edit data/my-episode/episode.json --edits output/my-episode/edits-001.json --batch output/my-episode/batch-001.json
+bash "$PS_SKILL_ROOT/scripts/run.sh" edit data/my-episode/episode.json --edits output/my-episode/edits-001.json --batch output/my-episode/batch-001.json --note '本批主题、关键事实、疑点及段落 ID'
 bash "$PS_SKILL_ROOT/scripts/run.sh" complete data/my-episode/episode.json
 bash "$PS_SKILL_ROOT/scripts/run.sh" validate data/my-episode/episode.json
 bash "$PS_SKILL_ROOT/scripts/run.sh" export data/my-episode/episode.json
@@ -138,7 +140,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" export data/my-episode/episode.json
 
 默认输出 `output/<id>/<id>.md` 和 `output/<id>/<id>.pdf`。用户只要 Markdown 时加 `--formats markdown`；用户指定路径时传 `--output-dir`。
 
-自动模式逐批记为 `edited`，Agent 完成全文整理后用 `complete` 记录 `automated` 并直接交付，无需用户手动校对。精准模式逐段核验后记为 `reviewed`，未解项请用户确认，再运行 `complete --basis source_checked`。用户明确接受当前稿时运行 `complete --basis user_accepted`，保留接受依据，不声称已经听音。`complete` 不修订文字，不代替全文整理。修改正文或归属后需重新收尾；详细状态与旧稿兼容见 [校对约定](schema.md#校对状态)。
+自动模式逐批显式记为 `edited`，Agent 完成全文整理、核对节目元数据、处理人物归属并生成覆盖全篇的摘要章节后，用 `complete` 记录 `automated` 并直接交付。`batch.done` 与 `editing_progress.remaining_to_edit=0` 只表示当前整理范围已处理，不等于整集完成。精准模式逐段核验后记为 `reviewed`，未解项请用户确认，再运行 `complete --basis source_checked`。用户明确接受当前稿时运行 `complete --basis user_accepted`，不声称已经听音。修改正文或归属后需重新收尾；详细状态与旧稿兼容见 [校对约定](schema.md#校对状态)。
 
 ## 可选阅读页与分享
 

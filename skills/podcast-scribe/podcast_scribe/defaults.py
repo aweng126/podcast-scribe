@@ -133,10 +133,11 @@ def existing_report(path: Path, identity: dict, args) -> dict | None:
         raise SourceConflict(path, "默认路径已有稿件，但已保存的来源链接不一致；已保留原文件，未重新处理。")
     if stored != identity:
         raise SourceConflict(path, "默认路径已有稿件，但来源身份不一致或无法核验；已保留原文件，未下载或转写。")
-    options = {name: getattr(args, name) for name in ("id", "title", "series_id", "series_title", "language", "review_mode")
+    options = {name: getattr(args, name) for name in ("id", "title", "series_id", "series_title", "language", "review_mode", "transcript_source")
                if getattr(args, name, None) is not None}
     return {"status": "existing", "episode": ep["id"], "path": str(path.resolve()),
             "review_mode": ep.get("review", {}).get("mode", "auto"),
+            "transcript_source": ep.get("transcription", {}).get("source"),
             "message": "已找到同一来源的稿件，未覆盖或重新转写。生成参数不会修改已有稿件；请继续 status/batch/edit/export，确需重建则指定新的 --output。",
             "requested_options": options, "next_steps": ["status", "batch", "edit", "export"]}
 

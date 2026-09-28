@@ -14,7 +14,7 @@
 npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 ```
 
-首次运行由 Agent 检查并按需安装运行依赖。音视频转写需在运行环境中配置 `OPENAI_API_KEY`，音频会发送到 OpenAI API 并产生接口费用；导入已有转写无需转写 API。
+首次运行由 Agent 检查并按需安装运行依赖。使用合格字幕或导入已有转写无需转写 API；需要音频转写时才需配置 `OPENAI_API_KEY`，发送音频到 OpenAI API 并产生接口费用。
 
 ## 使用
 
@@ -26,7 +26,7 @@ npx skills@latest add aweng126/podcast-scribe --skill podcast-scribe -a codex
 
 也可将链接换成本地文件路径，如 `./episode.mp3` 或 `./input.srt`。
 
-默认自动整理并交付本地 Markdown/PDF，无需逐条手动核对，输出位于 `output/<id>/`。长音视频自动分片，支持中断续跑。
+B站默认优先使用字幕，少量缺口局部补齐，否则转写音频；自动整理后交付本地 Markdown/PDF，输出位于 `output/<id>/`。转写与分批整理均支持中断续接，无需逐条手动核对。
 
 需要逐项核验时加上“使用精准模式”；需要离线页面时加上“生成本地阅读页”。
 

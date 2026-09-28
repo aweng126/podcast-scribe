@@ -175,6 +175,21 @@ def test_all_silence_is_cached_without_repeated_api_calls(mocked_pipeline, monke
     assert len(state["calls"]) == 3
 
 
+def test_silent_subtitle_gap_can_be_cached_and_reused_without_a_key(mocked_pipeline, monkeypatch):
+    state = mocked_pipeline
+    state["duration"] = 20
+    state["results"] = [{"segments": []}]
+    metadata = {}
+    assert run(state, metadata=metadata, allow_empty=True) == ([], [])
+    assert metadata["duration_seconds"] == 20
+    monkeypatch.delenv("OPENAI_API_KEY")
+    assert run(state, allow_empty=True) == ([], [])
+    # The opt-in must not change the normal empty-recording error or rebill it.
+    with pytest.raises(ContentError, match="没有可用转写内容"):
+        run(state)
+    assert len(state["calls"]) == 1
+
+
 @pytest.mark.parametrize("payload", [
     {"segments": [speech(start=float("nan"))]},
     {"segments": [speech(end=float("inf"))]},

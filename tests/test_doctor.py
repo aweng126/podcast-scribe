@@ -47,7 +47,7 @@ def test_default_reports_missing_dependencies_and_returns_nonzero(isolated_envir
         assert result["ready"] is False
         assert all(issue["code"] and issue["message"] and issue["remedy"] for issue in result["issues"])
     codes = {issue["code"] for issue in report["capabilities"]["ingest"]["issues"]}
-    assert codes == {"openai_unavailable", "openai_api_key_missing", "ffmpeg_missing", "yt_dlp_unavailable"}
+    assert codes == {"yt_dlp_unavailable"}
 
 
 def test_local_require_does_not_check_keys_fonts_dependencies_or_binaries(isolated_environment, monkeypatch, capsys):
@@ -120,7 +120,7 @@ def test_all_capabilities_ready_uses_local_checks_only(isolated_environment, mon
     report = _report(capsys)
     assert report["ready"] is True
     assert all(result == {"ready": True, "issues": []} for result in report["capabilities"].values())
-    assert len(calls) == 1  # ingest shares its transcription checks
+    assert len(calls) == 1  # only transcription requires ffmpeg
     command, options = calls[0]
     assert command == ["/fake/ffmpeg", "-version"]
     assert options["timeout"] == doctor.FFMPEG_TIMEOUT_SECONDS
@@ -159,6 +159,21 @@ def test_inspect_needs_no_api_key_font_or_ffmpeg(isolated_environment, monkeypat
     monkeypatch.setattr(doctor, "_pdf", isolated_environment)
     monkeypatch.setattr(doctor, "_ffmpeg", isolated_environment)
     assert main(["doctor", "--require", "inspect"]) == 0
+    assert _report(capsys)["ready"] is True
+    assert imports == ["yt_dlp"]
+
+
+def test_subtitle_first_ingest_needs_no_cloud_transcription_dependencies(isolated_environment, monkeypatch, capsys):
+    imports = []
+
+    def load(name):
+        imports.append(name)
+        assert name == "yt_dlp"
+        return SimpleNamespace()
+
+    monkeypatch.setattr(doctor.importlib, "import_module", load)
+    monkeypatch.setattr(doctor, "_ffmpeg", isolated_environment)
+    assert main(["doctor", "--require", "ingest"]) == 0
     assert _report(capsys)["ready"] is True
     assert imports == ["yt_dlp"]
 

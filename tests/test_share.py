@@ -42,11 +42,15 @@ def submission(reviewed):
 
 
 def test_share_whitelist_preserves_public_content_without_mutating_local_record(reviewed):
+    reviewed["transcription"] = {"source": "subtitles+audio", "repairs": [
+        {"transcription_cache": "/private/local/cache"}]}
+    reviewed["editing_progress"] = {"notes": ["PRIVATE_BATCH_NOTE"]}
     before = deepcopy(reviewed)
     public = make_submission(reviewed, attribution="测试投稿者")
     payload = canonical_bytes(public).decode()
     for private in ("PRIVATE_RAW_TEXT", "PRIVATE_SOURCE_TOKEN", "PRIVATE_SPEAKER_NOTE", "/private/",
-                    '"artifacts"', '"history"', '"raw_text"', '"status"', '"is_demo"'):
+                    '"artifacts"', '"history"', '"raw_text"', '"status"', '"is_demo"',
+                    '"transcription"', '"editing_progress"', "PRIVATE_BATCH_NOTE"):
         assert private not in payload
     assert public["episode"]["segments"][0]["text"] == reviewed["segments"][0]["text"]
     assert public["episode"]["source"]["url"] == reviewed["source"]["url"]
