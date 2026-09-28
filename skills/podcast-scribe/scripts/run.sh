@@ -3,18 +3,12 @@
 set -euo pipefail
 
 ps_skill_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
-ps_probe='import importlib.metadata, importlib.util, re, shutil, sys
+ps_probe='import sys
 if sys.version_info < (3, 10):
     raise SystemExit(1)
-def available(module, package, minimum):
-    try:
-        version = importlib.metadata.version(package)
-        release = re.match(r"\d+(?:\.\d+)*", version)
-        parts = tuple(int(part) for part in release.group().split(".")) if release else ()
-        return importlib.util.find_spec(module) is not None and parts + (0,) * 4 >= minimum
-    except (ImportError, ValueError):
-        return False
-print(sum(available(*item) for item in (("openai", "openai", (2, 15)), ("yt_dlp", "yt-dlp", (2026, 8, 19)), ("reportlab", "reportlab", (4, 4)))) + int(bool(shutil.which("ffmpeg") or available("imageio_ffmpeg", "imageio-ffmpeg", (0, 6)))))'
+sys.path.insert(0, sys.argv[1])
+from podcast_scribe.runtime_dependencies import environment_score
+print(environment_score(load=len(sys.argv) > 2 and sys.argv[2] == "import"))'
 
 ps_python=""
 ps_score=-1
@@ -22,7 +16,7 @@ ps_candidates=()
 if [[ -n "${PODCAST_SCRIBE_PYTHON:-}" ]]; then
     # An explicit override is one executable, never a shell command to evaluate.
     ps_override="$(command -v -- "$PODCAST_SCRIBE_PYTHON" || true)"
-    if [[ -z "$ps_override" ]] || ! ps_score="$("$ps_override" -c "$ps_probe" 2>/dev/null)"; then
+    if [[ -z "$ps_override" ]] || ! ps_score="$("$ps_override" -c "$ps_probe" "$ps_skill_root" 2>/dev/null)"; then
         printf '%s\n' 'PODCAST_SCRIBE_PYTHON 必须指向可用的 Python 3.10+ 解释器。' >&2
         exit 2
     fi
@@ -43,7 +37,7 @@ else
     done
     for ps_candidate in "${ps_candidates[@]}"; do
         [[ -x "$ps_candidate" ]] || continue
-        if ! ps_candidate_score="$("$ps_candidate" -c "$ps_probe" 2>/dev/null)"; then continue; fi
+        if ! ps_candidate_score="$("$ps_candidate" -c "$ps_probe" "$ps_skill_root" 2>/dev/null)"; then continue; fi
         [[ "$ps_candidate_score" =~ ^[0-4]$ ]] || continue
         if (( ps_candidate_score > ps_score )); then
             ps_python="$ps_candidate"
@@ -62,11 +56,9 @@ if [[ "${1:-}" == setup ]]; then
         printf '%s\n' '用法：bash scripts/run.sh setup' >&2
         exit 2
     fi
-    if [[ "$ps_score" == 4 ]] && "$ps_python" -c \
-        'import openai, yt_dlp, reportlab, shutil
-if not shutil.which("ffmpeg"):
-    import imageio_ffmpeg' >/dev/null 2>&1; then
+    if [[ "$ps_score" == 4 ]] && ps_import_score="$("$ps_python" -c "$ps_probe" "$ps_skill_root" import 2>/dev/null)" && [[ "$ps_import_score" == 4 ]]; then
         printf '已复用具备所需 Python 依赖的环境：%s\n' "$ps_python"
+        printf '%s\n' '请重新运行任务所需的 doctor 检查；Python 依赖就绪不代表中文字体、ffmpeg 可执行文件或 API 密钥已就绪。'
         exit 0
     fi
     if [[ -n "${PODCAST_SCRIBE_PYTHON:-}" ]]; then
@@ -84,7 +76,12 @@ if not shutil.which("ffmpeg"):
         exit 2
     fi
     "$ps_setup_python" -m pip install -e "$ps_skill_root"
+    if ! ps_setup_score="$("$ps_setup_python" -c "$ps_probe" "$ps_skill_root" import 2>/dev/null)" || [[ "$ps_setup_score" != 4 ]]; then
+        printf '%s\n' '安装后 Python 依赖检查未通过；请运行 doctor 检查版本和导入错误。' >&2
+        exit 2
+    fi
     printf 'Python 依赖已安装：%s\n' "$ps_setup_python"
+    printf '%s\n' '请重新运行任务所需的 doctor 检查；setup 不安装中文字体、不配置 API 密钥。'
     exit 0
 fi
 

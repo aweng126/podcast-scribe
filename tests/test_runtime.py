@@ -2,12 +2,15 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 
 import pytest
+
+from podcast_scribe import runtime_dependencies
 
 
 LAUNCHER = Path(__file__).resolve().parents[1] / "skills/podcast-scribe/scripts/run.sh"
@@ -21,6 +24,10 @@ def launch(tmp_path):
     work.mkdir()
     script = skill / "scripts/run.sh"
     shutil.copyfile(LAUNCHER, script)
+    (skill / "podcast_scribe").mkdir()
+    (skill / "podcast_scribe/__init__.py").write_text("")
+    shutil.copyfile(LAUNCHER.parent.parent / "podcast_scribe/runtime_dependencies.py",
+                    skill / "podcast_scribe/runtime_dependencies.py")
     (skill / "scripts/podcast_scribe.py").write_text(
         "import json, os, sys\nfrom pathlib import Path\n"
         "Path('data').mkdir(exist_ok=True)\n"
@@ -135,7 +142,7 @@ def test_setup_creates_isolated_environment_and_installs_only_there(launch):
     installer = (
         f"#!{sys.executable}\n"
         "import json, sys\nfrom pathlib import Path\n"
-        "if sys.argv[1] == '-c':\n    raise SystemExit(0)\n"
+        "if sys.argv[1] == '-c':\n    print(4)\n    raise SystemExit(0)\n"
         "assert sys.argv[1:5] == ['-m', 'pip', 'install', '-e']\n"
         "Path(__file__).with_name('install.json').write_text(json.dumps("
         "{'cwd': str(Path.cwd()), 'args': sys.argv[1:]}))\n"
@@ -182,3 +189,80 @@ def test_setup_installs_into_explicit_environment_so_subsequent_calls_use_it(lau
     result = run("doctor", override=python)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["runtime"] == "explicit"
+
+
+@pytest.mark.parametrize(("version", "minimum", "ready"), [
+    ("2.15", "2.15", True), ("2.15.0", "2.15", True), ("2.15.0.0.0", "2.15", True),
+    ("2.14.99", "2.15", False), ("2.15rc1", "2.15", False), ("2.15.dev1", "2.15", False),
+    ("2.15.post1", "2.15", True), ("2.15+local", "2.15", True),
+    ("2026.08.19", "2026.8.19", True), ("2026.8.9", "2026.8.19", False),
+    ("1!0.1", "2.15", True),
+])
+def test_minimum_version_comparison(version, minimum, ready):
+    assert runtime_dependencies.meets_minimum(version, minimum) is ready
+
+
+def test_runtime_minimums_match_installation_requirements():
+    manifest = (LAUNCHER.parent.parent / "pyproject.toml").read_text()
+    requirements = dict(re.findall(r'"([\w-]+)>=([\d.]+)"', manifest))
+    for package, minimum in runtime_dependencies.DEPENDENCIES.values():
+        assert requirements[package] == minimum
+
+
+def test_dependency_probe_bootstraps_without_site_packages():
+    result = subprocess.run(
+        [sys.executable, "-S", "-c",
+         "import sys; sys.path.insert(0, sys.argv[1]); "
+         "from podcast_scribe.runtime_dependencies import environment_score; "
+         "import shutil; shutil.which = lambda name: None; print(environment_score())",
+         str(LAUNCHER.parent.parent)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0"
+
+
+def test_environment_score_checks_minimum_versions_without_importing_dependencies(monkeypatch):
+    monkeypatch.setattr(runtime_dependencies.shutil, "which", lambda name: None)
+    versions = {package: minimum for package, minimum in runtime_dependencies.DEPENDENCIES.values()}
+    monkeypatch.setattr(runtime_dependencies.importlib.metadata, "version", versions.__getitem__)
+    monkeypatch.setattr(runtime_dependencies.importlib.util, "find_spec", lambda name: object())
+
+    def broken_import(name):
+        raise RuntimeError("broken native extension")
+
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", broken_import)
+    assert runtime_dependencies.environment_score() == 4
+    assert runtime_dependencies.environment_score(load=True) == 0
+    versions["yt-dlp"] = "2026.8.18"
+    assert runtime_dependencies.environment_score() == 3
+
+    def missing(package):
+        raise runtime_dependencies.importlib.metadata.PackageNotFoundError(package)
+
+    monkeypatch.setattr(runtime_dependencies.importlib.metadata, "version", missing)
+    assert runtime_dependencies.environment_score() == 0
+
+    monkeypatch.setattr(runtime_dependencies.importlib.metadata, "version", versions.__getitem__)
+    monkeypatch.setattr(runtime_dependencies.importlib.util, "find_spec", lambda name: None)
+    assert runtime_dependencies.environment_score() == 0
+
+
+def test_setup_reports_failure_when_installation_still_leaves_incompatible_dependencies(launch):
+    skill, work, run = launch
+    python = work / "selected environment/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\nfrom pathlib import Path\n"
+        "if sys.argv[1] == '-c':\n    print(0)\n    raise SystemExit(0)\n"
+        "assert sys.argv[1:5] == ['-m', 'pip', 'install', '-e']\n"
+        "Path(__file__).with_name('installed.json').write_text(json.dumps(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    result = run("setup", override=python)
+    assert result.returncode == 2
+    assert python.with_name("installed.json").exists()
+    assert "doctor" in result.stderr
+    assert "Python 依赖已安装" not in result.stdout

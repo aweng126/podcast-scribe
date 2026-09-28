@@ -40,7 +40,7 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" --help
 bash "$PS_SKILL_ROOT/scripts/run.sh" setup
 ```
 
-`setup` 复用已满足依赖的 Python 环境，或在 Skill 目录创建 `.venv` 并安装依赖。主动设置了 `PODCAST_SCRIBE_PYTHON` 时，仅向该解释器所属的有效虚拟环境安装；不向全局 Python 安装。没有 Python 3.10+ 时需要先提供可用的 Python；`setup` 不生成密钥，也不授予远端访问权限。
+`setup` 复用已满足依赖的 Python 环境，或在 Skill 目录创建 `.venv` 并安装依赖，安装后重新检查导入与最低版本。主动设置了 `PODCAST_SCRIBE_PYTHON` 时，仅向该解释器所属的有效虚拟环境安装；不向全局 Python 安装。没有 Python 3.10+ 时需要先提供可用的 Python；`setup` 不安装系统字体、不生成密钥，也不授予远端访问权限。执行后重新运行任务所需的 `doctor --require ...`，确认字体与外部程序等前置条件。
 
 始终从**任务工作区**执行，不要切换到 Skill 安装目录。默认文稿为 `data/<id>/episode.json`，导出为 `output/<id>/`，音频缓存为 `data/cache/`；相对路径均基于任务工作区。系列由 Agent 按 [系列归属](series.md) 核实，无法确定时为 `inbox` / “未分类”。更新 Skill 可能替换安装目录，文稿和缓存应留在任务工作区；更新后由 Agent 重新检查环境。
 
@@ -65,9 +65,18 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require import markdown pdf
 | `transcribe` | `openai` SDK、`OPENAI_API_KEY` 与可执行的 ffmpeg。 |
 | `ingest` | `yt-dlp`；只有转入音频路径时才需要 `transcribe` 的条件。 |
 
-完整依赖包含 `reportlab`、`openai`、`yt-dlp` 和提供内置 ffmpeg 的 `imageio-ffmpeg`。自检会运行 ffmpeg 版本命令，并实际检查 PDF 字体能否加载。`doctor` 不联网、不调用 API，不验证服务端权限、账户额度或密钥有效性。
+完整依赖包含 `reportlab`、`openai`、`yt-dlp` 和提供内置 ffmpeg 的 `imageio-ffmpeg`。启动器与 `doctor` 共用最低版本规则；启动器轻量检查模块位置和安装版本，`doctor` 与 `setup` 额外验证实际导入。`doctor` 的 `dependencies` 列出当前版本、最低版本及诊断状态，缺少版本元数据不能视为已满足。自检会运行 ffmpeg 版本命令，并实际检查 PDF 字体能否加载。`doctor` 不联网、不调用 API，不验证服务端权限、账户额度或密钥有效性。
 
 PDF 自动探测常见系统字体；未找到时可通过环境变量 `PODCAST_SCRIBE_FONT` 指定有中文字形的 `.ttf` 或 TrueType `.ttc`。不是所有 `.ttc` / OpenType 字体都支持嵌入。导出后仍须渲染检查分页、中文和段落完整性。
+
+干净的 Debian/Ubuntu 环境可安装文泉驿正黑，再复查：
+
+```sh
+sudo apt-get install fonts-wqy-zenhei
+bash "$PS_SKILL_ROOT/scripts/run.sh" doctor --require pdf
+```
+
+程序会探测 `/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc`。没有系统安装权限时，将可嵌入的中文 TrueType 字体放在可读取的本地目录，并设置 `PODCAST_SCRIBE_FONT=/absolute/path/chinese.ttf` 后复查。仅安装 Noto CJK 的 OpenType/CFF 字体不一定可供 ReportLab 嵌入，需以 `doctor --require pdf` 的结果为准；不要反复运行 `setup` 尝试修复字体。
 
 ## 单集生产与续编
 

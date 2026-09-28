@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from podcast_scribe import doctor
+from podcast_scribe import doctor, runtime_dependencies
 from podcast_scribe.cli import main
 
 
@@ -18,7 +18,9 @@ def isolated_environment(monkeypatch):
     def missing(name):
         raise ModuleNotFoundError(name)
 
-    monkeypatch.setattr(doctor.importlib, "import_module", missing)
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", missing)
+    versions = {package: minimum for package, minimum in runtime_dependencies.DEPENDENCIES.values()}
+    monkeypatch.setattr(runtime_dependencies.importlib.metadata, "version", versions.__getitem__)
 
     def unexpected(*args, **kwargs):
         raise AssertionError("unexpected external operation")
@@ -64,7 +66,7 @@ def test_local_require_does_not_check_keys_fonts_dependencies_or_binaries(isolat
 def test_pdf_checks_the_exporter_font_and_handles_invalid_font(isolated_environment, monkeypatch, capsys):
     from podcast_scribe import exporters
 
-    monkeypatch.setattr(doctor.importlib, "import_module", lambda name: SimpleNamespace())
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", lambda name: SimpleNamespace())
     called = []
 
     def invalid_font():
@@ -86,7 +88,7 @@ def test_pdf_checks_the_exporter_font_and_handles_invalid_font(isolated_environm
 ])
 def test_ffmpeg_failure_is_actionable(isolated_environment, monkeypatch, capsys, failure, code):
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-secret")
-    monkeypatch.setattr(doctor.importlib, "import_module", lambda name: SimpleNamespace())
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", lambda name: SimpleNamespace())
     monkeypatch.setattr(doctor.shutil, "which", lambda name: "/fake/ffmpeg")
 
     def fail(*args, **kwargs):
@@ -104,10 +106,10 @@ def test_all_capabilities_ready_uses_local_checks_only(isolated_environment, mon
     from podcast_scribe import exporters
 
     module = SimpleNamespace(OpenAI=isolated_environment, YoutubeDL=isolated_environment)
-    monkeypatch.setattr(doctor.importlib, "import_module", lambda name: module)
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", lambda name: module)
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-secret")
     monkeypatch.setattr(exporters, "_pdf_font", lambda: "MockChineseFont")
-    monkeypatch.setattr(doctor, "_ocr", lambda: [])
+    monkeypatch.setattr(doctor, "_ocr", lambda dependencies=None: [])
     monkeypatch.setattr(doctor.shutil, "which", lambda name: "/fake/ffmpeg")
     calls = []
 
@@ -134,7 +136,7 @@ def test_transcribe_can_use_bundled_imageio_binary_without_running_resolver(isol
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b"fake binary; subprocess is mocked")
     imageio = SimpleNamespace(__file__=str(package / "__init__.py"), get_ffmpeg_exe=isolated_environment)
-    monkeypatch.setattr(doctor.importlib, "import_module", lambda name: imageio if name == "imageio_ffmpeg" else SimpleNamespace())
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", lambda name: imageio if name == "imageio_ffmpeg" else SimpleNamespace())
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-secret")
     calls = []
 
@@ -155,7 +157,7 @@ def test_inspect_needs_no_api_key_font_or_ffmpeg(isolated_environment, monkeypat
         imports.append(name)
         return SimpleNamespace()
 
-    monkeypatch.setattr(doctor.importlib, "import_module", load)
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", load)
     monkeypatch.setattr(doctor, "_pdf", isolated_environment)
     monkeypatch.setattr(doctor, "_ffmpeg", isolated_environment)
     assert main(["doctor", "--require", "inspect"]) == 0
@@ -171,7 +173,7 @@ def test_subtitle_first_ingest_needs_no_cloud_transcription_dependencies(isolate
         assert name == "yt_dlp"
         return SimpleNamespace()
 
-    monkeypatch.setattr(doctor.importlib, "import_module", load)
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", load)
     monkeypatch.setattr(doctor, "_ffmpeg", isolated_environment)
     assert main(["doctor", "--require", "ingest"]) == 0
     assert _report(capsys)["ready"] is True
@@ -193,7 +195,7 @@ def test_diagnostic_exceptions_never_print_api_key(isolated_environment, monkeyp
     def unsafe_error(*args, **kwargs):
         raise PermissionError(secret)
 
-    monkeypatch.setattr(doctor.importlib, "import_module", dependency)
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", dependency)
     monkeypatch.setattr(exporters, "_pdf_font", unsafe_error)
     monkeypatch.setattr(doctor.subprocess, "run", unsafe_error)
     assert main(["doctor"]) == 2
@@ -213,3 +215,53 @@ def test_cli_rejects_unknown_capability():
     with pytest.raises(SystemExit) as exc:
         main(["doctor", "--require", "unknown"])
     assert exc.value.code == 2
+
+
+@pytest.mark.parametrize(("module", "capability", "old_version"), [
+    ("yt_dlp", "ingest", "2026.8.18"),
+    ("openai", "transcribe", "2.14.9"),
+    ("reportlab", "pdf", "4.3.9"),
+    ("imageio_ffmpeg", "transcribe", "0.5.1"),
+])
+def test_importable_old_versions_are_not_ready(isolated_environment, monkeypatch, capsys,
+                                               module, capability, old_version):
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", lambda name: SimpleNamespace())
+    versions = {package: minimum for package, minimum in runtime_dependencies.DEPENDENCIES.values()}
+    package, minimum = runtime_dependencies.DEPENDENCIES[module]
+    versions[package] = old_version
+    monkeypatch.setattr(runtime_dependencies.importlib.metadata, "version", versions.__getitem__)
+    assert main(["doctor", "--require", capability]) == 2
+    report = _report(capsys)
+    assert report["dependencies"][module] == {
+        "package": package, "minimum": minimum, "installed": old_version, "status": "too_old",
+    }
+    assert any(issue["code"] == f"{module}_too_old"
+               for issue in report["capabilities"][capability]["issues"])
+
+
+@pytest.mark.parametrize("version", [None, "not-a-version-secret"])
+def test_missing_or_invalid_version_metadata_does_not_report_ready(isolated_environment, monkeypatch, capsys, version):
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", lambda name: SimpleNamespace())
+
+    def metadata(package):
+        if version is None:
+            raise runtime_dependencies.importlib.metadata.PackageNotFoundError("private path or secret")
+        return version
+
+    monkeypatch.setattr(runtime_dependencies.importlib.metadata, "version", metadata)
+    assert main(["doctor", "--require", "inspect"]) == 2
+    report = _report(capsys)
+    expected = "version_missing" if version is None else "version_invalid"
+    assert report["dependencies"]["yt_dlp"]["status"] == expected
+    assert report["dependencies"]["yt_dlp"]["installed"] is None
+    assert report["capabilities"]["inspect"]["issues"][0]["code"] == f"yt_dlp_{expected}"
+    assert "secret" not in json.dumps(report)
+
+
+def test_ready_dependency_reports_installed_and_minimum_versions(isolated_environment, monkeypatch, capsys):
+    monkeypatch.setattr(runtime_dependencies.importlib, "import_module", lambda name: SimpleNamespace())
+    monkeypatch.setattr(runtime_dependencies.importlib.metadata, "version", lambda name: "2026.9.1")
+    assert main(["doctor", "--require", "inspect"]) == 0
+    assert _report(capsys)["dependencies"] == {
+        "yt_dlp": {"package": "yt-dlp", "minimum": "2026.8.19", "installed": "2026.9.1", "status": "ready"},
+    }
