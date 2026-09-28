@@ -112,6 +112,7 @@ def test_import_resolves_name_and_default_does_not_guess_from_title(tmp_path, mo
 
 def test_invalid_series_fails_before_paid_transcription(tmp_path, monkeypatch):
     from podcast_scribe import transcribe
+    monkeypatch.chdir(tmp_path)
     source = tmp_path / "audio.mp3"
     source.write_bytes(b"mock audio")
     def unexpected(*args, **kwargs):

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .audio_chunks import analyze_audio, extract_audio
+from .cache_lifecycle import register_media, touch_media_tree, was_removed
 from .defaults import destination_lock
 from .model import ContentError, write_json
 from .transcribe import transcribe_audio
@@ -46,6 +47,7 @@ def repair_subtitles(document: dict, assessment: dict, audio: Path, work: Path,
     source_hash = _hash(audio)
     directory = Path(work) / "subtitle-repairs" / source_hash
     directory.mkdir(parents=True, exist_ok=True)
+    touch_media_tree(directory)
     rows, repairs = [], []
     for cue in document["cues"]:
         if not any(cue["start"] < item["end"] and cue["end"] > item["start"]
@@ -66,11 +68,18 @@ def repair_subtitles(document: dict, assessment: dict, audio: Path, work: Path,
                     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
                 except (OSError, ValueError) as exc:
                     raise ContentError("字幕补齐音频缓存损坏，请保留文件检查") from exc
-                if (not isinstance(saved, dict) or saved.get("identity") != identity or not clip.is_file()
-                        or _hash(clip) != saved.get("sha256")):
+                if not isinstance(saved, dict) or saved.get("identity") != identity:
+                    raise ContentError("字幕补齐音频缓存校验失败，请保留文件检查")
+                if not clip.exists() and was_removed(clip, saved.get("sha256")):
+                    extract_audio(audio, clip, start, end)
+                    if not clip.is_file() or _hash(clip) != saved.get("sha256"):
+                        raise ContentError("字幕补齐音频缓存校验失败，请保留文件检查")
+                    register_media(clip)
+                elif not clip.is_file() or _hash(clip) != saved.get("sha256"):
                     raise ContentError("字幕补齐音频缓存校验失败，请保留文件检查")
             else:
                 extract_audio(audio, clip, start, end)
+                register_media(clip)
                 write_json(manifest_path, {"identity": identity, "sha256": _hash(clip)})
         info = {}
         segments, _ = transcribe_audio(clip, asr_cache, language=language, metadata=info,

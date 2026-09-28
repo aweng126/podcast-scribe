@@ -264,10 +264,10 @@ def test_video_download_is_explicit_separate_low_resolution_and_cached(provider,
         assert "height<=480" in ydl.params["format"]
         assert "source-video" in ydl.params["outtmpl"]
         return {"id": BV, "formats": [{"vcodec": "none", "url": "audio"}, {"vcodec": "avc1", "url": "video"}]}
-    def download(_ydl, info):
+    def download(ydl, info):
         calls.append(info)
         assert [item["url"] for item in info["formats"]] == ["video"]
-        path = tmp_path / "source-video.mp4"
+        path = Path(ydl.params["outtmpl"] % {"ext": "mp4"})
         path.write_bytes(b"synthetic complete video")
         return {"requested_downloads": [{"filepath": str(path)}]}
     monkeypatch.setattr(sources, "_extract_single", extract)
@@ -276,7 +276,7 @@ def test_video_download_is_explicit_separate_low_resolution_and_cached(provider,
     original = sources._ydl
     def downloader(extra):
         instance = original(extra)
-        instance.prepare_filename = lambda info: str(tmp_path / "source-video.mp4")
+        instance.prepare_filename = lambda info: instance.params["outtmpl"] % {"ext": "mp4"}
         return instance
     monkeypatch.setattr(sources, "_ydl", downloader)
     path = sources.fetch_video(URL, tmp_path)

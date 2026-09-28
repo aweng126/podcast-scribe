@@ -13,6 +13,7 @@ import time
 
 from .audio_chunks import (MAX_CHUNK_SECONDS, MAX_UPLOAD_BYTES, analyze_audio,
                            extract_audio, ffmpeg_binary, plan_chunks, prepare_audio)
+from .cache_lifecycle import register_media, touch_media_tree, was_removed
 from .model import ContentError, write_json
 from .transcripts import normalize_segments
 
@@ -38,6 +39,17 @@ def _read(path: Path) -> dict:
     if not isinstance(data, dict):
         raise ContentError(f"转写缓存不是对象：{path}")
     return data
+
+
+def _ensure_media(path: Path, expected_sha256: str, rebuild, message: str):
+    """Only a recorded cache eviction permits reconstructing missing media."""
+    if not path.exists() and was_removed(path, expected_sha256):
+        rebuild()
+        if not path.is_file() or _sha256(path) != expected_sha256:
+            raise ContentError(message)
+        register_media(path)
+    elif not path.is_file() or _sha256(path) != expected_sha256:
+        raise ContentError(message)
 
 
 def _rows(payload: dict, duration: float | None = None) -> list[dict]:
@@ -96,6 +108,7 @@ def _legacy_cache(source: Path, cache_dir: Path, language: str):
     path = cache_dir / digest.hexdigest() / "transcription.json"
     if not path.is_file():
         return None
+    touch_media_tree(path.parent)
     payload = _read(path)
     return normalize_segments(_rows(payload)), payload.get("duration"), path
 
@@ -243,10 +256,14 @@ def _add_references(rows: list[dict], mapped: list[dict], references: list[dict]
         old = saved.get(name)
         if old:
             if (old.get("source_label") != label or old.get("start") != absolute_start
-                    or old.get("end") != absolute_end or not path.is_file() or _sha256(path) != old.get("sha256")):
+                    or old.get("end") != absolute_end):
                 raise ContentError("声源参考缓存校验失败，请保留成功响应并检查缓存")
+            _ensure_media(path, old.get("sha256"),
+                          lambda: extract_audio(audio_path, path, absolute_start, absolute_end, reference=True),
+                          "声源参考缓存校验失败，请保留成功响应并检查缓存")
         else:
             extract_audio(audio_path, path, absolute_start, absolute_end, reference=True)
+            register_media(path)
         references.append({"name": name, "source_label": label, "file": str(path.relative_to(work)),
                            "sha256": _sha256(path), "chunk_id": chunk["id"],
                            "start": absolute_start, "end": absolute_end,
@@ -321,6 +338,7 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
                      config_hash: str, metadata: dict | None, *,
                      allow_empty: bool = False) -> tuple[list[dict], list[dict]]:
     language = config["language"]
+    touch_media_tree(work)
     manifest = _load_manifest(work, source_hash, config)
     final_path = work / "transcription.json"
     if manifest and manifest.get("status") == "complete" and final_path.is_file():
@@ -340,6 +358,7 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
     audio_path = work / "audio.mp3"
     if manifest is None:
         audio_path = prepare_audio(source, audio_path)
+        register_media(audio_path)
         analysis = analyze_audio(audio_path)
         manifest = {"schema_version": CACHE_VERSION, "source_sha256": source_hash, "config": config,
                     "duration": analysis["duration"], "audio_sha256": _sha256(audio_path),
@@ -347,8 +366,10 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
                     "status": "in_progress", "speaker_references": [],
                     "notes": ["声源参考匹配不代表真实身份；所有说话人和强制切分边界仍需核对。"]}
         write_json(work / "manifest.json", manifest)
-    elif not audio_path.is_file() or _sha256(audio_path) != manifest.get("audio_sha256"):
-        raise ContentError("转换音频缓存缺失或校验失败，请保留已完成响应并检查缓存")
+    else:
+        _ensure_media(audio_path, manifest.get("audio_sha256"),
+                      lambda: prepare_audio(source, audio_path),
+                      "转换音频缓存缺失或校验失败，请保留已完成响应并检查缓存")
     combined, references = [], []
     previous_references = manifest.get("speaker_references", [])
     with OpenAI(max_retries=0, timeout=600) as client:
@@ -372,8 +393,11 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
                         path = audio_path
                     elif not chunk.get("audio_sha256"):
                         extract_audio(audio_path, path, chunk["start"], chunk["end"])
-                    elif not path.is_file() or _sha256(path) != chunk["audio_sha256"]:
-                        raise ContentError(f"{chunk['id']} 的音频缓存校验失败")
+                        register_media(path)
+                    else:
+                        _ensure_media(path, chunk["audio_sha256"],
+                                      lambda: extract_audio(audio_path, path, chunk["start"], chunk["end"]),
+                                      f"{chunk['id']} 的音频缓存校验失败")
                     if path.stat().st_size > MAX_UPLOAD_BYTES:
                         raise ContentError("单个音频分片超过 24 MB，已停止上传")
                     chunk["audio_sha256"] = _sha256(path)

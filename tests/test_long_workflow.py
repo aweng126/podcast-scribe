@@ -9,6 +9,7 @@ from podcast_scribe.transcripts import normalize_segments
 def test_transcribe_preserves_four_hour_duration_with_silent_tail(tmp_path, monkeypatch):
     from podcast_scribe import transcribe
 
+    monkeypatch.chdir(tmp_path)
     source = tmp_path / "synthetic.mp4"
     source.write_bytes(b"synthetic input; API and decoder are mocked")
     output = tmp_path / "episode.json"

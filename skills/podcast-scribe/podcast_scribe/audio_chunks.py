@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 
 from .model import ContentError
 
@@ -44,12 +45,19 @@ def prepare_audio(source: Path, destination: Path) -> Path:
     source, destination = Path(source), Path(destination)
     if not source.is_file():
         raise ContentError(f"音视频文件不存在：{source}")
+    if source.resolve() == destination.resolve():
+        raise ContentError("转换音频不能覆盖调用者的源文件")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temp = destination.with_name(destination.stem + ".tmp.mp3")
-    _run(["-loglevel", "error", "-y", "-i", str(source.resolve()), "-map", "0:a:0",
-          "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k",
-          str(temp.resolve())])
-    temp.replace(destination)
+    with tempfile.NamedTemporaryFile(prefix=destination.stem + ".tmp-", suffix=".mp3",
+                                     dir=destination.parent, delete=False) as stream:
+        temp = Path(stream.name)
+    try:
+        _run(["-loglevel", "error", "-y", "-i", str(source.resolve()), "-map", "0:a:0",
+              "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k",
+              str(temp.resolve())])
+        temp.replace(destination)
+    finally:
+        temp.unlink(missing_ok=True)
     return destination
 
 
@@ -105,14 +113,21 @@ def plan_chunks(duration: float, silences: list, *, max_seconds: float = MAX_CHU
 
 def extract_audio(audio: Path, destination: Path, start: float, end: float, *, reference: bool = False) -> Path:
     """Accurate decode-and-trim, without MP3 stream-copy seek offsets."""
+    audio, destination = Path(audio), Path(destination)
+    if audio.resolve() == destination.resolve():
+        raise ContentError("音频分片不能覆盖调用者的源文件")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temp = destination.with_name(destination.stem + ".tmp" + destination.suffix)
+    with tempfile.NamedTemporaryFile(prefix=destination.stem + ".tmp-", suffix=destination.suffix,
+                                     dir=destination.parent, delete=False) as stream:
+        temp = Path(stream.name)
     codec = ["-c:a", "pcm_s16le"] if reference else ["-c:a", "libmp3lame", "-b:a", "32k"]
-    _run(["-loglevel", "error", "-y", "-ss", f"{start:.6f}", "-i", str(audio.resolve()),
-          "-t", f"{end - start:.6f}", "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000",
-          *codec, str(temp.resolve())], timeout=600)
-    if temp.stat().st_size > MAX_UPLOAD_BYTES:
-        temp.unlink()
-        raise ContentError("单个音频分片超过 24 MB，已停止上传；请检查音频编码配置")
-    temp.replace(destination)
+    try:
+        _run(["-loglevel", "error", "-y", "-ss", f"{start:.6f}", "-i", str(audio.resolve()),
+              "-t", f"{end - start:.6f}", "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000",
+              *codec, str(temp.resolve())], timeout=600)
+        if temp.stat().st_size > MAX_UPLOAD_BYTES:
+            raise ContentError("单个音频分片超过 24 MB，已停止上传；请检查音频编码配置")
+        temp.replace(destination)
+    finally:
+        temp.unlink(missing_ok=True)
     return destination

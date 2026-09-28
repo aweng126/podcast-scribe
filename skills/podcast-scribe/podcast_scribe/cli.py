@@ -74,10 +74,17 @@ def _save_new(args, metadata, segments, speakers):
 
 
 def _save_revision(path, before, after):
-    backup = path.parent / "history" / f"{before['id']}-r{before.get('revision', 1)}.json"
-    if not backup.exists():
-        write_json(backup, before)
+    from .history import compact_history, save_revision_backup
+    save_revision_backup(path, before)
     save_episode(path, after)
+    review = after.get("review", {})
+    # Amortize full archive verification over long editing runs. Completion and
+    # delivery always compact; at most nine extra recent snapshots wait here.
+    if after.get("revision", 1) % 10 == 0 or (review.get("content_checked") and review.get("speakers_confirmed")):
+        try:
+            compact_history(path)
+        except (OSError, ContentError) as exc:
+            print(f"文稿已保存，历史压缩暂未完成：{exc}", file=sys.stderr)
 
 
 def _resume_default(args, identity, *, default_output: bool) -> bool:
@@ -184,6 +191,13 @@ def parser():
     p.add_argument("episode", type=Path)
     p.add_argument("--formats", nargs="+", choices=["markdown", "pdf"], default=["markdown", "pdf"])
     p.add_argument("--output-dir", type=Path, help="默认 output/<单集 ID>/")
+    p.add_argument("--keep-media", action="store_true", help="完整交付后保留已登记媒体，免于自动过期回收")
+    p = sub.add_parser("cleanup", help="预览单集媒体清理或过期缓存回收；--apply 才执行")
+    p.add_argument("episode", type=Path, nargs="?")
+    p.add_argument("--expired", action="store_true", help="回收指定缓存中长期未使用的已登记媒体")
+    p.add_argument("--cache", type=Path, default=Path("data/cache"))
+    p.add_argument("--older-than-days", type=float, default=7, help="过期天数，默认 7")
+    p.add_argument("--apply", action="store_true", help="执行清理；省略时仅预览")
     p = sub.add_parser("publish", help="将校对完成的单集标为已发布；不执行公网部署")
     p.add_argument("episode", type=Path)
     p = sub.add_parser("share", help="生成公开投稿 JSON 与 Issue 表单链接；不自动上传或发布")
@@ -203,6 +217,25 @@ def parser():
 
 
 def run(args):
+    if args.command in {"ingest", "transcribe", "check-subtitles"}:
+        from .cache_lifecycle import bind_episode, media_session
+        inputs = [getattr(args, key, None) for key in ("file", "video")]
+        with media_session(args.cache, protected=inputs):
+            try:
+                return _run(args)
+            finally:
+                # Failed/incomplete tasks also own their acquired media, so a
+                # different episode's successful export cannot remove it early.
+                path = args.episode if args.command == "check-subtitles" else args.output
+                if path is not None:
+                    try:
+                        bind_episode(path)
+                    except (OSError, ContentError) as exc:
+                        print(f"媒体归属记录暂未保存：{exc}", file=sys.stderr)
+    return _run(args)
+
+
+def _run(args):
     if args.command == "doctor":
         from .doctor import check_environment
         report = check_environment(args.require)
@@ -427,17 +460,46 @@ def run(args):
             record_progress(args.episode, before, after, edits, batch, note=args.note)
         print(f"已保存草稿 r{after['revision']}：{args.episode.resolve()}")
     elif args.command == "complete":
-        before = load_episode(args.episode, for_edit=True)
-        after = complete_episode(before, basis=args.basis)
-        _save_revision(args.episode, before, after)
+        from .defaults import destination_lock
+        with destination_lock(args.episode):
+            before = load_episode(args.episode, for_edit=True)
+            after = complete_episode(before, basis=args.basis)
+            _save_revision(args.episode, before, after)
         print(f"已完成（{after['review']['basis']}）并保存草稿 r{after['revision']}：{args.episode.resolve()}")
     elif args.command == "export":
+        from .cache_lifecycle import cleanup_episode, record_delivery
+        from .defaults import destination_lock
         from .exporters import export_episode
-        ep = load_episode(args.episode)
-        paths = export_episode(ep, args.output_dir or Path("output") / ep["id"], args.formats)
-        ep.setdefault("artifacts", {}).update({key: str(path.resolve()) for key, path in paths.items()})
-        save_episode(args.episode, ep)
+        from .history import compact_history
+        with destination_lock(args.episode):
+            ep = load_episode(args.episode)
+            if args.keep_media:
+                cleanup_episode(args.episode, keep_media=True)
+            paths = export_episode(ep, args.output_dir or Path("output") / ep["id"], args.formats)
+            ep.setdefault("artifacts", {}).update({key: str(path.resolve()) for key, path in paths.items()})
+            save_episode(args.episode, ep)
+            if record_delivery(args.episode, ep, paths):
+                try:
+                    cleanup = cleanup_episode(args.episode, apply=True, keep_media=args.keep_media)
+                    history = compact_history(args.episode)
+                    print(json.dumps({"media_cleanup": cleanup, "history": history}, ensure_ascii=False), file=sys.stderr)
+                except (OSError, ContentError) as exc:
+                    print(f"导出已完成，清理暂未完成：{exc}", file=sys.stderr)
         print(json.dumps({key: str(path.resolve()) for key, path in paths.items()}, ensure_ascii=False, indent=2))
+    elif args.command == "cleanup":
+        from .cache_lifecycle import cleanup_episode, prune_expired
+        from .defaults import destination_lock
+        from .history import compact_history
+        if bool(args.episode) == args.expired:
+            raise ContentError("请选择一个单集路径，或使用 --expired 回收过期缓存")
+        if args.expired:
+            result = prune_expired(args.cache, older_than_days=args.older_than_days, apply=args.apply)
+            result["applied"] = args.apply
+        else:
+            with destination_lock(args.episode):
+                result = cleanup_episode(args.episode, apply=args.apply)
+                result["history"] = compact_history(args.episode, dry_run=not args.apply)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "share":
         from .share import canonical_bytes, issue_url, make_submission, submission_digest
         if not args.confirm_public:

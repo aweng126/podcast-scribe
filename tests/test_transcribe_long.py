@@ -10,6 +10,7 @@ import wave
 import pytest
 
 from podcast_scribe import audio_chunks
+from podcast_scribe import cache_lifecycle as lifecycle
 from podcast_scribe import transcribe as module
 from podcast_scribe.model import ContentError, write_json
 
@@ -310,6 +311,106 @@ def test_interruption_after_response_write_does_not_repeat_billable_request(mock
     assert len(state["calls"]) == 1
     monkeypatch.setattr(module, "_add_references", original)
     run(state)
+    assert len(state["calls"]) == 2
+
+
+def _partial_cache(state):
+    failure = RuntimeError("unauthorized")
+    failure.status_code = 401
+    state["results"] = [{"segments": [speech()]}, failure]
+    with pytest.raises(ContentError, match="HTTP 401"):
+        run(state)
+    return manifest(state)
+
+
+def _expire_registered_media(cache):
+    index_path = cache / lifecycle.INDEX
+    index = json.loads(index_path.read_text())
+    for entry in index["files"].values():
+        entry["last_used"] = 0
+    write_json(index_path, index)
+    report = lifecycle.prune_expired(cache, apply=True)
+    assert report["files"] and not report["skipped"]
+    return report
+
+
+def test_complete_response_needs_no_media_key_conversion_or_api(mocked_pipeline, monkeypatch):
+    state = mocked_pipeline
+    state["results"] = [{"segments": [speech()]}, {"segments": [speech("voice-0001")]},
+                        {"segments": [speech(end=1)]}]
+    with lifecycle.media_session(state["cache"], protected=[state["source"]]):
+        expected = run(state)
+    path, _ = manifest(state)
+    _expire_registered_media(state["cache"])
+    assert not list(path.parent.rglob("*.mp3")) and not list(path.parent.rglob("*.wav"))
+    assert (path.parent / "transcription.json").is_file()
+    monkeypatch.delenv("OPENAI_API_KEY")
+    monkeypatch.setattr(module, "prepare_audio", lambda *args: pytest.fail("completed cache must not convert"))
+    monkeypatch.setattr(module, "extract_audio", lambda *args, **kwargs: pytest.fail("completed cache must not extract"))
+    with lifecycle.media_session(state["cache"], protected=[state["source"]]):
+        assert run(state) == expected
+    assert len(state["calls"]) == 3
+
+
+def test_removed_partial_media_rebuilds_with_identical_hashes_without_rebilling_success(mocked_pipeline):
+    state = mocked_pipeline
+    with lifecycle.media_session(state["cache"], protected=[state["source"]]):
+        path, before = _partial_cache(state)
+    response = path.parent / "chunks/chunk-0001.json"
+    original_response = response.read_bytes()
+    removed = _expire_registered_media(state["cache"])
+    assert len(removed["files"]) == 4  # Converted source, two chunks, and one reference.
+    state["results"] = [{"segments": [speech("voice-0001")]}, {"segments": [speech(end=1)]}]
+    with lifecycle.media_session(state["cache"], protected=[state["source"]]):
+        segments, _ = run(state)
+    assert response.read_bytes() == original_response
+    assert [call["file"] for call in state["calls"]] == [
+        "chunk-0001.mp3", "chunk-0002.mp3", "chunk-0002.mp3", "chunk-0003.mp3"]
+    assert [row["start"] for row in segments] == [0, 900, 1800]
+    assert segments[0]["speaker_id"] == segments[1]["speaker_id"]
+    _, after = manifest(state)
+    assert after["audio_sha256"] == before["audio_sha256"]
+    assert after["speaker_references"][0] == before["speaker_references"][0]
+    assert not (path.parent / "chunks/chunk-0001.mp3").exists()  # Its response is sufficient.
+
+
+@pytest.mark.parametrize("relative", ["audio.mp3", "references/voice-0001.wav", "chunks/chunk-0002.mp3"])
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_unrecorded_missing_or_corrupt_partial_media_stops_before_more_api(
+        mocked_pipeline, relative, damage):
+    state = mocked_pipeline
+    path, _ = _partial_cache(state)
+    media = path.parent / relative
+    if damage == "missing":
+        media.unlink()
+    else:
+        media.write_bytes(b"corrupted media")
+    with pytest.raises(ContentError, match="缓存"):
+        run(state)
+    assert len(state["calls"]) == 2
+
+
+@pytest.mark.parametrize("relative", ["audio.mp3", "references/voice-0001.wav", "chunks/chunk-0002.mp3"])
+def test_reconstructed_media_must_match_original_hash_before_more_api(
+        mocked_pipeline, monkeypatch, relative):
+    state = mocked_pipeline
+    path, _ = _partial_cache(state)
+    media = path.parent / relative
+    digest = module._sha256(media)
+    media.unlink()
+    monkeypatch.setattr(module, "was_removed", lambda candidate, expected: candidate == media and expected == digest)
+    operation = "prepare_audio" if relative == "audio.mp3" else "extract_audio"
+    original = getattr(module, operation)
+
+    def changed_encoding(source, target, *args, **kwargs):
+        result = original(source, target, *args, **kwargs)
+        if target == media:
+            target.write_bytes(b"different ffmpeg output")
+        return result
+
+    monkeypatch.setattr(module, operation, changed_encoding)
+    with pytest.raises(ContentError, match="缓存"):
+        run(state)
     assert len(state["calls"]) == 2
 
 

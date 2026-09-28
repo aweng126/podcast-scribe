@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from podcast_scribe.model import ContentError
+from podcast_scribe import cache_lifecycle as lifecycle
 from podcast_scribe.subtitle_ingest import assess_subtitles
 from podcast_scribe import subtitle_repair as repair
 
@@ -254,6 +255,46 @@ def test_clip_cache_damage_stops_before_another_asr_attempt(offline, damage):
         offline.run(source, selected)
     offline.transcribe.assert_not_called()
     offline.extract.assert_not_called()
+
+
+def test_evicted_clip_is_rebuilt_with_same_identity_for_asr_reuse(offline):
+    source = document([("left", 0, 10, "前文"), ("right", 20, 100, "后文")])
+    selected = assessment((10, 20))
+    with lifecycle.media_session(offline.work, protected=[offline.audio]):
+        expected = offline.run(source, selected)
+    clip = offline.transcribe.call_args.args[0]
+    clip_bytes, manifest_bytes = clip.read_bytes(), clip.with_suffix(".json").read_bytes()
+    index_path = offline.work / lifecycle.INDEX
+    index = json.loads(index_path.read_text())
+    for entry in index["files"].values():
+        entry["last_used"] = 0
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+    report = lifecycle.prune_expired(offline.work, apply=True)
+    assert report["files"] == [str(clip)] and not report["skipped"]
+    assert not clip.exists()
+    with lifecycle.media_session(offline.work, protected=[offline.audio]):
+        assert offline.run(source, selected) == expected
+    assert clip.read_bytes() == clip_bytes
+    assert clip.with_suffix(".json").read_bytes() == manifest_bytes
+    assert offline.extract.call_count == 2
+    assert offline.transcribe.call_args_list[0].args == offline.transcribe.call_args_list[1].args
+
+
+def test_evicted_clip_with_changed_encoding_is_rejected_before_asr(offline, monkeypatch):
+    source = document([("left", 0, 10, "前文"), ("right", 20, 100, "后文")])
+    selected = assessment((10, 20))
+    offline.run(source, selected)
+    clip = offline.transcribe.call_args.args[0]
+    manifest_bytes = clip.with_suffix(".json").read_bytes()
+    saved = json.loads(manifest_bytes)
+    clip.unlink()
+    monkeypatch.setattr(repair, "was_removed", lambda path, digest: path == clip and digest == saved["sha256"])
+    offline.extract.side_effect = lambda source, target, start, end: target.write_bytes(b"changed conversion")
+    offline.transcribe.reset_mock()
+    with pytest.raises(ContentError, match="缓存校验失败"):
+        offline.run(source, selected)
+    offline.transcribe.assert_not_called()
+    assert clip.with_suffix(".json").read_bytes() == manifest_bytes
 
 
 @pytest.mark.parametrize("start,end", [(-0.01, 2), (2, 10.26), (6, 5), (math.nan, 5), (0, math.inf)])

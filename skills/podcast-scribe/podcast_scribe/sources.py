@@ -7,8 +7,11 @@ from hashlib import sha256
 from html import unescape
 import json
 import math
+import os
 import re
 from pathlib import Path
+import stat
+import tempfile
 from urllib.parse import parse_qs, urlparse
 
 from .model import ContentError
@@ -281,27 +284,32 @@ def inspect_source(value: str, *, auth=None) -> dict:
 
 
 def fetch_audio(value: str, work_dir: Path, *, auth=None) -> Path:
+    from .cache_lifecycle import register_media, touch_media_tree
     url = normalize_url(value)
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
+    touch_media_tree(work_dir)
     # Only complete files with supported extensions count as cached audio.
     for path in sorted(work_dir.glob("source.*")):
         if _complete_audio(path):
             return path
     try:
-        with _ydl({"format": "bestaudio/best", "outtmpl": str(work_dir / "source.%(ext)s"),
-                   "max_filesize": 1024 * 1024 * 1024, "overwrites": True}) as ydl:
-            if auth is not None:
-                auth.attach(ydl)
-            info = _extract_single(ydl, url)
-            info = _download_audio(ydl, info)
-            path = Path(ydl.prepare_filename(info))
-            requested = info.get("requested_downloads") or []
-            if requested and requested[0].get("filepath"):
-                path = Path(requested[0]["filepath"])
-        if not _complete_audio(path):
-            raise ContentError("音频下载未完成，未生成文稿")
-        return path
+        # Own one fresh directory rather than guessing which old .part files
+        # belong to us. Fragments and partial downloads leave with this context.
+        with tempfile.TemporaryDirectory(prefix=".media-download-", dir=work_dir) as temporary:
+            staging = Path(temporary).resolve()
+            with _ydl({"format": "bestaudio/best", "outtmpl": str(staging / "source.%(ext)s"),
+                       "max_filesize": 1024 * 1024 * 1024, "overwrites": True}) as ydl:
+                if auth is not None:
+                    auth.attach(ydl)
+                info = _extract_single(ydl, url)
+                info = _download_audio(ydl, info)
+                path = _download_path(ydl, info, staging)
+            if not _complete_audio(path):
+                raise ContentError("音频下载未完成，未生成文稿")
+            path = _promote_download(path, staging, work_dir)
+            register_media(path)
+            return path
     except ContentError:
         raise
     except Exception as exc:
@@ -313,6 +321,42 @@ def _complete_audio(path: Path) -> bool:
             and ".part" not in path.suffixes
             and path.is_file() and path.stat().st_size > 0
             and not Path(str(path) + ".part").exists())
+
+
+def _download_path(ydl, info: dict, staging: Path, *, stem: str = "source") -> Path:
+    path = Path(ydl.prepare_filename(info))
+    requested = info.get("requested_downloads") or []
+    if requested and requested[0].get("filepath"):
+        path = Path(requested[0]["filepath"])
+    if (not re.fullmatch(re.escape(stem) + r"\.[A-Za-z0-9]+", path.name)
+            or path.is_symlink() or path.resolve().parent != staging):
+        raise ContentError("下载结果不在本次临时目录内，已保留外部文件")
+    if path.exists():
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise ContentError("下载结果不是普通媒体文件")
+        finally:
+            os.close(descriptor)
+    return path
+
+
+def _promote_download(path: Path, staging: Path, work_dir: Path) -> Path:
+    destination = work_dir / path.name
+    old_partial = Path(str(destination) + ".part")
+    token = staging.name.removeprefix(".media-download-")
+    alternative = work_dir / f"{path.stem}.{token}{path.suffix}"
+    if old_partial.exists() or old_partial.is_symlink():
+        destination = alternative
+    # Publish without overwriting any old file, including one another caller
+    # created during this transfer. Both paths are on the same filesystem.
+    try:
+        os.link(path, destination, follow_symlinks=False)
+    except FileExistsError:
+        destination = alternative
+        os.link(path, destination, follow_symlinks=False)
+    path.unlink()
+    return destination
 
 
 def _download_audio(ydl, info: dict) -> dict:
@@ -615,43 +659,46 @@ def fetch_subtitles(value: str, work_dir: Path, *, auth=None, refresh=False) -> 
 
 def fetch_video(value: str, work_dir: Path, *, auth=None) -> Path:
     """Fetch only the requested video for an explicitly requested OCR check."""
+    from .cache_lifecycle import register_media, touch_media_tree
     url, work_dir = normalize_url(value), Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
+    touch_media_tree(work_dir)
     identity, manifest = _subtitle_identity(url), work_dir / "source-video-manifest.json"
     try:
         saved = json.loads(manifest.read_text(encoding="utf-8"))
         filename = saved["filename"]
         path = work_dir / filename
         if (saved.get("schema_version") == 1 and saved.get("source") == identity
-                and isinstance(filename, str) and re.fullmatch(r"source-video\.(?:mp4|webm|mkv|mov)", filename)
+                and isinstance(filename, str) and re.fullmatch(r"source-video(?:\.[A-Za-z0-9_-]+)?\.(?:mp4|webm|mkv|mov)", filename)
                 and _complete_video(path) and saved.get("sha256") == _file_hash(path)):
             return path
     except (OSError, ValueError, TypeError, KeyError):
         pass
     try:
-        with _ydl({"format": "bestvideo[height<=480]/best[height<=480]/worstvideo/worst",
-                   "outtmpl": str(work_dir / "source-video.%(ext)s"),
-                   "max_filesize": 1024 * 1024 * 1024, "overwrites": True}) as ydl:
-            if auth is not None:
-                auth.attach(ydl)
-            info = _extract_single(ydl, url, audio_only=False)
-            formats = info.get("formats") or [info]
-            formats = [fmt for fmt in formats if fmt.get("vcodec") != "none"]
-            if not formats:
-                raise ContentError("来源没有可用视频轨；无法检查画面字幕")
-            info = {**info, "formats": formats}
-            info = _download_audio(ydl, info)
-            path = Path(ydl.prepare_filename(info))
-            requested = info.get("requested_downloads") or []
-            if requested and requested[0].get("filepath"):
-                path = Path(requested[0]["filepath"])
-        if not _complete_video(path):
-            raise ContentError("视频下载未完成；无法检查画面字幕")
-        temporary = manifest.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps({"schema_version": 1, "source": identity, "filename": path.name,
-                                         "sha256": _file_hash(path)}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(manifest)
-        return path
+        with tempfile.TemporaryDirectory(prefix=".media-download-", dir=work_dir) as temporary:
+            staging = Path(temporary).resolve()
+            with _ydl({"format": "bestvideo[height<=480]/best[height<=480]/worstvideo/worst",
+                       "outtmpl": str(staging / "source-video.%(ext)s"),
+                       "max_filesize": 1024 * 1024 * 1024, "overwrites": True}) as ydl:
+                if auth is not None:
+                    auth.attach(ydl)
+                info = _extract_single(ydl, url, audio_only=False)
+                formats = info.get("formats") or [info]
+                formats = [fmt for fmt in formats if fmt.get("vcodec") != "none"]
+                if not formats:
+                    raise ContentError("来源没有可用视频轨；无法检查画面字幕")
+                info = {**info, "formats": formats}
+                info = _download_audio(ydl, info)
+                path = _download_path(ydl, info, staging, stem="source-video")
+            if not _complete_video(path):
+                raise ContentError("视频下载未完成；无法检查画面字幕")
+            path = _promote_download(path, staging, work_dir)
+            register_media(path)
+            temporary_manifest = staging / manifest.name
+            temporary_manifest.write_text(json.dumps({"schema_version": 1, "source": identity, "filename": path.name,
+                                                      "sha256": _file_hash(path)}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temporary_manifest.replace(manifest)
+            return path
     except ContentError as exc:
         raise ContentError(str(exc).replace("音频", "视频")) from exc
     except Exception as exc:

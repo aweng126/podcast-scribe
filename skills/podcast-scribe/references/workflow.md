@@ -140,6 +140,8 @@ bash "$PS_SKILL_ROOT/scripts/run.sh" export data/my-episode/episode.json
 
 默认输出 `output/<id>/<id>.md` 和 `output/<id>/<id>.pdf`。用户只要 Markdown 时加 `--formats markdown`；用户指定路径时传 `--output-dir`。
 
+仅已 `complete` 且本次 Markdown、PDF 均成功生成并通过基础验证后，`export` 才自动清理已登记的工具媒体；未完成、导出失败或仅导出一种格式时保留。用户要求保留媒体时加 `--keep-media`，该选择也阻止过期回收。原始输入、转写与字幕证据、最终稿和公开投稿保留；每次新媒体处理自动尝试回收 7 天未使用的登记媒体，编辑历史按版本无损压缩。清理范围、保留条件与手动预览命令见 [存储与清理](storage.md)。
+
 自动模式逐批显式记为 `edited`，Agent 完成全文整理、核对节目元数据、处理人物归属并生成覆盖全篇的摘要章节后，用 `complete` 记录 `automated` 并直接交付。`batch.done` 与 `editing_progress.remaining_to_edit=0` 只表示当前整理范围已处理，不等于整集完成。精准模式逐段核验后记为 `reviewed`，未解项请用户确认，再运行 `complete --basis source_checked`。用户明确接受当前稿时运行 `complete --basis user_accepted`，不声称已经听音。修改正文或归属后需重新收尾；详细状态与旧稿兼容见 [校对约定](schema.md#校对状态)。
 
 ## 可选阅读页与分享
