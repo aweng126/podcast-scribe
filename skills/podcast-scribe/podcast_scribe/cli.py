@@ -461,10 +461,14 @@ def _run(args):
         print(f"已保存草稿 r{after['revision']}：{args.episode.resolve()}")
     elif args.command == "complete":
         from .defaults import destination_lock
+        from .editing_progress import completion_progress, progress_path
         with destination_lock(args.episode):
             before = load_episode(args.episode, for_edit=True)
             after = complete_episode(before, basis=args.basis)
+            progress = completion_progress(args.episode, before, after)
             _save_revision(args.episode, before, after)
+            if progress_path(args.episode).exists():
+                write_json(progress_path(args.episode), progress)
         print(f"已完成（{after['review']['basis']}）并保存草稿 r{after['revision']}：{args.episode.resolve()}")
     elif args.command == "export":
         from .cache_lifecycle import cleanup_episode, record_delivery

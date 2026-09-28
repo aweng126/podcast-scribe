@@ -291,3 +291,93 @@ def test_missing_note_text_is_detected_as_corruption(episode, tmp_path):
     progress_path(path).write_text(json.dumps(progress), encoding="utf-8")
     with pytest.raises(ContentError, match="损坏"):
         load_progress(path, after)
+
+
+def ready_to_complete(episode):
+    episode['summary'] = ['合成文稿的摘要。']
+    episode['chapters'] = [{'id': 'chapter-1', 'title': '开场', 'start': 0,
+                            'segment_id': episode['segments'][0]['id']}]
+    return episode
+
+
+def test_cli_completion_preserves_receipts_and_notes(episode, tmp_path, capsys):
+    from podcast_scribe.cli import main
+    path = tmp_path / 'episode.json'
+    episode = ready_to_complete(episode)
+    edited, progress = handle(path, episode, [
+        {'id': segment['id'], 'review_status': 'edited'} for segment in episode['segments']
+    ], note='本批事实与段落依据。')
+    assert main(['complete', str(path)]) == 0
+    completed = json.loads(path.read_text())
+    progress = load_progress(path, completed)
+    assert progress_summary(completed, progress)['registered'] == len(episode['segments'])
+    assert progress_summary(completed, progress)['invalidated'] == 0
+    assert not read_notes(completed, progress)['notes'][0]['stale']
+    assert main(['status', str(path)]) == 0
+    report = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert report['completion_basis'] == 'automated'
+    assert report['editing_progress']['remaining_to_edit'] == 0
+
+
+def test_legacy_completion_and_interrupted_sidecar_write_are_readable(episode, tmp_path):
+    from podcast_scribe.model import complete_episode
+    path = tmp_path / 'episode.json'
+    episode = ready_to_complete(episode)
+    edited, progress = handle(path, episode, [
+        {'id': segment['id'], 'review_status': 'edited'} for segment in episode['segments']
+    ], note='旧版整理笔记。')
+    del progress['notes'][0]['content_fingerprints']
+    progress_path(path).write_text(json.dumps(progress))
+    saved_progress = progress_path(path).read_bytes()
+    completed = complete_episode(edited)
+    save_episode(path, completed)  # Simulate completion without its sidecar update.
+    restored = load_progress(path, completed)
+    assert progress_summary(completed, restored)['registered'] == len(episode['segments'])
+    assert not read_notes(completed, restored)['notes'][0]['stale']
+    assert progress_path(path).read_bytes() == saved_progress
+    completed['segments'][0]['text'] += '确有文字更正。'
+    assert progress_summary(completed, restored)['invalidated'] == 1
+    assert read_notes(completed, restored)['notes'][0]['stale']
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_notes_follow_content_not_review_status(episode, tmp_path, legacy):
+    path = tmp_path / 'episode.json'
+    edited, progress = handle(path, episode, [
+        {'id': segment['id'], 'review_status': 'edited'} for segment in episode['segments']
+    ], note='记录正文事实，状态变动不改变事实。')
+    if legacy:
+        del progress['notes'][0]['content_fingerprints']
+    changed = deepcopy(edited)
+    changed['segments'][0]['review_status'] = 'needs_review'
+    assert not read_notes(changed, progress)['notes'][0]['stale']
+    assert progress_summary(changed, progress)['invalidated'] == 1
+    changed['speakers'][0]['name'] = '人物更正'
+    assert read_notes(changed, progress)['notes'][0]['stale']
+
+
+def test_completion_does_not_revive_stale_receipts_or_notes(episode, tmp_path):
+    from podcast_scribe.model import complete_episode
+    from podcast_scribe.editing_progress import completion_progress
+    path = tmp_path / 'episode.json'
+    edited, progress = handle(path, ready_to_complete(episode), [
+        {'id': segment['id'], 'review_status': 'edited'} for segment in episode['segments']
+    ], note='编辑时的事实。')
+    edited['segments'][0]['text'] += '未登记的后续更正。'
+    completed = complete_episode(edited)
+    updated = completion_progress(path, edited, completed)
+    assert len(updated['entries']) == len(episode['segments']) - 1
+    assert read_notes(completed, updated)['notes'][0]['stale']
+
+
+def test_corrupt_progress_blocks_completion_before_manuscript_changes(episode, tmp_path):
+    from podcast_scribe.cli import main
+    path = tmp_path / 'episode.json'
+    edited, _ = handle(path, ready_to_complete(episode), [
+        {'id': segment['id'], 'review_status': 'edited'} for segment in episode['segments']
+    ])
+    before = path.read_bytes()
+    progress_path(path).write_text('{broken')
+    assert main(['complete', str(path)]) == 2
+    assert path.read_bytes() == before
+    assert not (tmp_path / 'history').exists()
