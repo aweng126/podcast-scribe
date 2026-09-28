@@ -381,3 +381,25 @@ def test_corrupt_progress_blocks_completion_before_manuscript_changes(episode, t
     assert main(['complete', str(path)]) == 2
     assert path.read_bytes() == before
     assert not (tmp_path / 'history').exists()
+
+
+@pytest.mark.parametrize('change_text', [False, True])
+def test_ordinary_edit_preserves_unaffected_legacy_completed_receipts(episode, tmp_path, change_text):
+    from podcast_scribe.model import complete_episode
+    path = tmp_path / 'episode.json'
+    edited, _ = handle(path, ready_to_complete(episode), [
+        {'id': segment['id'], 'review_status': 'edited'} for segment in episode['segments']
+    ])
+    completed = complete_episode(edited)
+    save_episode(path, completed)
+    edits = {'description': '只调整说明。'}
+    first = completed['segments'][0]['id']
+    if change_text:
+        edits['segments'] = [{'id': first, 'text': '这一段实际改变了。'}]
+    after = apply_edits(completed, edits)
+    save_episode(path, after)
+    progress = record_progress(path, completed, after, edits)
+    expected = {s['id'] for s in completed['segments']}
+    if change_text:
+        expected.remove(first)
+    assert valid_skip_ids(after, progress) == expected

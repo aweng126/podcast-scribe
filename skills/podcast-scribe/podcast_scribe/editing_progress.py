@@ -205,8 +205,11 @@ def record_progress(episode_path: Path, before: dict, after: dict, edits: dict,
         # A stale receipt must not revive when an ordinary edit happens to
         # restore an older value (including after an external/manual edit).
         previously_valid = _valid_entries(before, progress)
-        retained = {ident: digest for ident, digest in _valid_entries(after, progress).items()
-                    if ident in previously_valid}
+        previous = _fingerprints(before)
+        # Normalize legacy completion receipts before an ordinary edit clears
+        # the completed flags; unrelated metadata edits must retain them.
+        retained = {ident: current[ident] for ident in previously_valid
+                    if current.get(ident) == previous.get(ident)}
     result = deepcopy(progress)
     result.update(mode=_mode(after), entries=retained)
     if batch is not None:
