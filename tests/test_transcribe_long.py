@@ -4,6 +4,7 @@ import json
 import math
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 import wave
 
@@ -312,6 +313,80 @@ def test_interruption_after_response_write_does_not_repeat_billable_request(mock
     monkeypatch.setattr(module, "_add_references", original)
     run(state)
     assert len(state["calls"]) == 2
+
+
+def _interrupt_final_merge(state, monkeypatch):
+    state["results"] = [{"segments": [speech()]}, {"segments": [speech("voice-0001")]},
+                        {"segments": [speech(end=1)]}]
+    original = module.write_json
+
+    def interrupt_final(path, payload):
+        if path.name == "transcription.json":
+            raise OSError("synthetic interruption before final merge")
+        return original(path, payload)
+
+    monkeypatch.setattr(module, "write_json", interrupt_final)
+    with pytest.raises(OSError, match="before final merge"):
+        run(state)
+    monkeypatch.setattr(module, "write_json", original)
+    assert len(state["calls"]) == 3
+    monkeypatch.delenv("OPENAI_API_KEY")
+    monkeypatch.setitem(sys.modules, "openai", None)
+    return manifest(state)
+
+
+def test_all_successful_chunks_can_finish_merge_without_key_or_sdk(mocked_pipeline, monkeypatch):
+    state = mocked_pipeline
+    path, before = _interrupt_final_merge(state, monkeypatch)
+    originals = {p: p.read_bytes() for p in path.parent.glob("chunks/*.json")}
+    segments, people = run(state)
+    assert [row["start"] for row in segments] == [0, 900, 1800]
+    assert segments[0]["speaker_id"] == segments[1]["speaker_id"]
+    assert len(people) == 2 and len(state["calls"]) == 3
+    assert all(p.read_bytes() == content for p, content in originals.items())
+    _, after = manifest(state)
+    assert before["status"] == "in_progress" and after["status"] == "complete"
+    assert after["speaker_references"] == before["speaker_references"]
+
+
+@pytest.mark.parametrize("damage", ["audio", "reference", "response", "context"])
+def test_keyless_merge_recovery_still_validates_cache(mocked_pipeline, monkeypatch, damage):
+    state = mocked_pipeline
+    path, saved = _interrupt_final_merge(state, monkeypatch)
+    if damage == "context":
+        response_path = path.parent / "chunks/chunk-0002.json"
+        response = json.loads(response_path.read_text())
+        response["context"]["references"] = []
+        write_json(response_path, response)
+        saved["chunks"][1]["response_sha256"] = module._sha256(response_path)
+        write_json(path, saved)
+    else:
+        relative = {"audio": "audio.mp3", "reference": "references/voice-0001.wav",
+                    "response": "chunks/chunk-0002.json"}[damage]
+        (path.parent / relative).write_bytes(b"corrupt cached content")
+    with pytest.raises(ContentError, match="缓存"):
+        run(state)
+    assert len(state["calls"]) == 3
+    assert not (path.parent / "transcription.json").exists()
+
+
+def test_pending_chunk_still_needs_key(mocked_pipeline, monkeypatch):
+    state = mocked_pipeline
+    path, _ = _interrupt_final_merge(state, monkeypatch)
+    (path.parent / "chunks/chunk-0003.json").unlink()
+    with pytest.raises(ContentError, match="OPENAI_API_KEY"):
+        run(state)
+    assert len(state["calls"]) == 3
+
+
+def test_new_recording_without_key_fails_before_conversion(mocked_pipeline, monkeypatch):
+    state = mocked_pipeline
+    monkeypatch.delenv("OPENAI_API_KEY")
+    monkeypatch.setattr(module, "prepare_audio", lambda *args: pytest.fail("must check key before conversion"))
+    with pytest.raises(ContentError, match="OPENAI_API_KEY"):
+        run(state)
+    assert not state["calls"]
+    assert not list(state["cache"].glob("*/manifest.json"))
 
 
 def _partial_cache(state):

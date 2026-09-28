@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import math
@@ -232,6 +232,21 @@ def _request(client, audio_path: Path, language: str, references: list[dict], wo
     raise AssertionError("unreachable")
 
 
+def _require_key():
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise ContentError("未配置 OPENAI_API_KEY。可在运行环境中配置，或用 import 命令导入已有转写；请勿将密钥写入文稿或代码。")
+
+
+def _new_client():
+    """Import and authenticate only when a validated chunk needs a new request."""
+    _require_key()
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise ContentError("缺少 openai Python SDK；请安装项目依赖") from exc
+    return OpenAI(max_retries=0, timeout=600)
+
+
 def _reference_context(references: list[dict]) -> list[dict]:
     return [{"name": ref["name"], "source_label": ref["source_label"], "sha256": ref["sha256"]}
             for ref in references]
@@ -351,14 +366,11 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
         _metadata(metadata, manifest, work, final["segments"])
         return _normalized(final["segments"], multiple_chunks=len(manifest["chunks"]) > 1,
                            allow_empty=allow_empty)
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise ContentError("未配置 OPENAI_API_KEY。可在运行环境中配置，或用 import 命令导入已有转写；请勿将密钥写入文稿或代码。")
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise ContentError("缺少 openai Python SDK；请安装项目依赖") from exc
     audio_path = work / "audio.mp3"
     if manifest is None:
+        # A new cache necessarily needs requests; fail before an expensive
+        # whole-recording conversion. Existing caches are checked chunk by chunk.
+        _require_key()
         audio_path = prepare_audio(source, audio_path)
         register_media(audio_path)
         analysis = analyze_audio(audio_path)
@@ -374,7 +386,8 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
                       "转换音频缓存缺失或校验失败，请保留已完成响应并检查缓存")
     combined, references = [], []
     previous_references = manifest.get("speaker_references", [])
-    with OpenAI(max_retries=0, timeout=600) as client:
+    with ExitStack() as stack:
+        client = None
         for index, chunk in enumerate(manifest["chunks"]):
             path = work / "chunks" / f"{chunk['id']}.mp3"
             response_path = path.with_suffix(".json")
@@ -404,6 +417,8 @@ def _transcribe_work(source: Path, work: Path, source_hash: str, config: dict,
                         raise ContentError("单个音频分片超过 24 MB，已停止上传")
                     chunk["audio_sha256"] = _sha256(path)
                     write_json(work / "manifest.json", manifest)
+                    if client is None:
+                        client = stack.enter_context(_new_client())
                     payload = _request(client, path, language, references, work, chunk["end"] - chunk["start"])
                     _rows(payload, chunk["end"] - chunk["start"])
                     write_json(response_path, {"context": context, "response": payload})
