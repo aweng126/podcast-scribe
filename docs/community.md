@@ -1,54 +1,42 @@
 # 社区分享与维护
 
-本地 Markdown/PDF 是默认产物；离线页面和社区分享均为可选功能。安装与使用见 [README](../README.md)。
+本文面向维护者。用户操作见 [分享、修改与撤稿指引](../skills/podcast-scribe/references/sharing.md#用户完整流程)。
 
-## 投稿
-
-用户从安装、生成文稿到上传、跟踪上线的完整步骤见 [分享、修改与撤稿指引](../skills/podcast-scribe/references/sharing.md#用户完整流程)。Skill 只生成公开 JSON 和预填 Issue 链接，由用户检查后上传提交。
-
-校验通过后，机器人创建 `community/issue-<编号>` 分支和内容 PR，并在 Issue 留下链接。维护者审核合并后，Pages 自动更新。Issue 和附件在收录审核前就已公开，公开 JSON 上限为 512 MiB；GitHub Issue 普通附件仍受平台的 25 MB 限制，更大文件使用投稿者公开仓库的 Release JSON 资产直链。
-
-一个 Issue 对应一份固定快照。首次有效投稿之后，编辑 Issue 或重跑工作流不会更新 PR 中的正文。需要改稿时新建分享 Issue，在评论中说明原投稿；不要在投稿表单正文中新增字段，解析器要求保留原有五个字段。校验失败且尚未生成快照时，可以修改原表单重试。
+用户提交 Issue → 机器人校验并创建 `community/issue-<编号>` 内容 PR → 维护者审核合并 → Pages 部署。Issue 和附件在审核前就已公开。
 
 ## 首次启用
 
-仓库管理员完成以下设置：
-
 1. **Settings → General → Features**：启用 Issues。
-2. **Settings → Actions → General**：允许运行本仓库工作流；在 **Workflow permissions** 中启用 **Allow GitHub Actions to create and approve pull requests**。组织策略若禁止此项，需要组织管理员调整。工作流按任务声明所需 token 权限，不需要添加 PAT。
+2. **Settings → Actions → General**：允许运行工作流，并在 **Workflow permissions** 勾选 **Allow GitHub Actions to create and approve pull requests**。若被组织策略禁用，联系组织管理员；无需添加 PAT。
 3. **Settings → Pages → Build and deployment → Source**：选择 **GitHub Actions**。
-4. 在 **Actions → Deploy community reader → Run workflow** 中选择 `main`，部署首次空目录页面。后续相关 `main` 提交自动部署。
+4. **Actions → Deploy community reader → Run workflow**：选择 `main`，完成首次部署。后续内容变更合并到 `main` 后自动部署，访问地址以 Pages 设置或部署输出为准。
 
-标准访问地址为 `https://aweng126.github.io/podcast-scribe/`；若账号配置了自定义域名，实际地址以 Pages 页面或成功部署的输出为准。只有 Pages 工作流成功后站点才可用。
-
-`Community submission` 创建 PR 若被权限设置阻止，会在 Issue 提示修改上述设置。调整后重跑该次工作流即可恢复；已经生成的快照会保留。
+若创建 PR 被权限设置阻止，按 Issue 反馈调整后重跑该次工作流，已有投稿快照会保留。
 
 ## 审核与收录
 
-审核 PR 的公开 JSON、来源、署名及 Issue 中的公开分享确认，查看 `Community validation` 检查结果，再由维护者合并。机器人创建的 PR 检查可能显示等待批准，维护者需要批准运行。不要启用投稿自动合并。
+核对正文、来源、署名、系列归属和 Issue 中的公开分享确认，等待 `Community validation` 通过后手动合并。若检查等待批准，先批准运行；不要启用投稿自动合并。阅读站会展示自动整理、用户接受或来源精校的完成方式，自动模式不额外要求投稿人逐句听音。
 
-正式数据保存在 `content/episodes/issue-<编号>.json`。机器人在创建 PR 前自动使用两空格缩进、固定字段排序和 UTF-8 中文保存，每个片段的字段单独成行，便于在 **Files changed** 中检查。用户导出的投稿 JSON 已有缩进，无需手动格式化；入库格式调整不改变正文或投稿 SHA-256。
+数据保存在 `content/episodes/issue-<原投稿编号>.json`，编号不是 PR 编号。机器人自动格式化 JSON，便于 **Files changed** 审核；格式化后超过 4 MiB 的记录改存为清单及同名目录中的 `part-*.bin` 分片。
 
-格式化后不超过 4 MiB 的记录保留单文件；更大的记录使用此文件作为可读清单，紧凑正文存为 `content/episodes/issue-<编号>/part-00000.bin` 等最多 4 MiB 的分片，避免缩进占用影响 512 MiB 投稿上限。每片和完整记录均有 SHA-256，重跑只能恢复同一快照。重组后的记录包含公开投稿、来源 Issue、投稿账号和内容 SHA-256。生成的页面及下载文件只作为 Actions 部署产物。构建会拒绝重复单集 ID、重复投稿、错误摘要、额外字段和不安全路径。
-
-大稿的 `.bin` 分片不适合直接在 GitHub 差异页阅读。先确认 PR 只新增该投稿的数据文件，在干净的本地工作区检出该内容 PR（例如 `gh pr checkout <PR编号>`），然后运行：
+大稿或需要完整预览时，先确认 PR 只涉及投稿数据及必要的分类文件，再在干净的工作区检出内容 PR（如 `gh pr checkout <PR编号>`），从仓库根目录运行：
 
 ```sh
-python3 scripts/build_public_site.py --content-dir content/episodes --output-dir output/site
+python3 scripts/build_public_site.py
 python3 -m http.server 8000 --bind 127.0.0.1 --directory output/site
 ```
 
-打开 `http://127.0.0.1:8000/`，逐页核对正文、说话人、章节、来源和署名；构建器会自动重组并核验所有分片摘要。仅结构检查通过不能替代人工审阅正文，确认后再合并。公共站点按需加载正文，预览需要 HTTP 服务；本地离线 HTML 功能仍通过 Skill 的 `site` 命令使用。
+打开 `http://127.0.0.1:8000/` 检查正文、人物和章节。构建会重组分片并验证摘要、格式及重复单集，但不能代替正文审阅；页面按需加载内容，预览需使用 HTTP 服务。
 
-投稿记录保留 `review.mode` 与 `review.basis`（旧稿可缺省），阅读站区分自动整理、用户接受和来源精校。自动模式不要求投稿人另做逐句听音；维护者仍审核是否收录。
+首次有效投稿形成固定快照，编辑 Issue 或重跑工作流不会替换正文；校验失败且尚未生成快照时可修正原表单重试。修订稿按下文新建投稿，不直接修改冻结 JSON 或重算 SHA-256。
 
 ## 系列归属维护
 
-Skill 在导出和投稿前负责依据官方节目资料填写系列，用户可补充信息；维护者审核最终归属。PR 会显示投稿系列及是否进入目录。无法确定时允许保留“未分类”，不阻止收录；校对状态与节目分类独立。
+Skill 根据官方资料填写系列，维护者审核最终归属；无法确认时可保留“未分类”，不阻止收录。
 
-标准目录为 [`skills/podcast-scribe/podcast_scribe/assets/series-catalog.json`](../skills/podcast-scribe/podcast_scribe/assets/series-catalog.json)。每项包含稳定 `id`、标准 `title`、`description`、`aliases` 和官方 `sources`（`title` / `url`）。新节目先确认官方名称与来源，再新增；同一节目的不同写法加入别名，避免新增重复系列。更名时保留原 ID，修改标题并将旧名保留为别名，站点会统一展示标准名称。构建会拒绝重名、歧义别名和同 ID 的未解决名称冲突。
+标准目录为 [`series-catalog.json`](../skills/podcast-scribe/podcast_scribe/assets/series-catalog.json)。新增系列先核实官方名称和来源；同一节目的不同写法加入 `aliases`。更名时保留 `id`，旧名保留为别名；删除或合并系列前先处理引用它的分类覆盖。
 
-**纠正单篇归属：** 在这份投稿的 PR 分支中，编辑 [`content/series-overrides.json`](../content/series-overrides.json)，在 `issues` 内添加原投稿 Issue 编号（不是 PR 编号），并保留其他记录。例如将假设的 Issue #17 归到已核实的节目：
+纠正单篇归属时，在内容 PR 中编辑 [`content/series-overrides.json`](../content/series-overrides.json)，以**原投稿 Issue 编号**添加映射并保留其他记录。例如：
 
 ```json
 {
@@ -62,67 +50,47 @@ Skill 在导出和投稿前负责依据官方节目资料填写系列，用户�
 }
 ```
 
-用实际 Issue 编号、目录 ID 和能够证明本期归属的官方链接替换示例。需要撤销错误分类但没有可靠替代时，可使用保留 ID `inbox`，来源链接记录本次核查对象。分类正确且 ID 已在目录中时无需添加覆盖记录。
+替换为实际 Issue 编号、目录 ID 和能证明本期归属的官方链接。撤销错误分类且暂无可靠替代时，用 `inbox` 并附核查来源；原分类正确时无需覆盖。
 
-运行 `python3 scripts/build_public_site.py`，检查构建和 PR 中的 `Community validation`，确认后合并。目录或覆盖文件修改都会触发 Pages 部署；已收录稿的分类修改也走普通 PR。阅读页、目录、搜索及站内 Markdown 使用最终归属，维护者的依据链接会显示在参考来源中。
-
-分类覆盖只调整展示副本，冻结投稿 JSON、原始 SHA-256、正文及本地文稿保持不变。不要直接改 `content/episodes/issue-N.json` 中的系列并重算摘要，那会丢失原投稿的追溯关系。自动收录重跑仍只识别原快照；人工加入分类文件后若创建 PR 的重试提示分支包含非投稿数据，由维护者核对并完成 PR，不让机器人覆盖分支。
-
-公共站同步发布 `series-catalog.json`，安装的 Skill 可读取该目录复用标准名称。目录只包含节目信息，不含用户文稿。撤稿时可一并清理该 Issue 的覆盖条目；有效的遗留映射不会阻塞撤稿构建。删除或合并系列前先处理引用它的覆盖记录。
+运行 `python3 scripts/build_public_site.py`，等待 `Community validation` 通过后合并。分类覆盖只影响站点展示与下载，保留原投稿及 SHA-256；已收录稿的分类调整也通过 PR 完成。若机器人重试因人工添加分类文件而拒绝分支，由维护者核对并完成 PR，不覆盖人工修改。
 
 ## 修改已收录文稿
 
-用户修订本地稿并重新完成所选模式后，通过新 Issue 投稿，在评论中提供旧 Issue 链接。新投稿 PR 尚未合并时，维护者切换到它的 `community/issue-<新编号>` 分支，先保留新旧记录并检查分类。例如用 Issue #23 替换 #17：
+1. 用户修订本地稿、重新完成所选模式后，新建分享 Issue，在评论中关联旧 Issue，保持原表单字段不变。同一单集沿用原 `id`。
+2. 检出新内容 PR，先保留新旧记录。以 Issue #23 替换 #17 为例：
 
-```sh
-python3 scripts/build_public_site.py --check-replacement 17 23
-```
+   ```sh
+   python3 scripts/build_public_site.py --check-replacement 17 23
+   ```
 
-该命令只输出新旧投稿的原始系列、当前有效系列和 Issue 分类覆盖，不构建站点或修改文件。即使两份记录的单集 ID 相同，也不会自动迁移分类。先核实确为同一单集的修订稿；若旧 Issue 有维护者覆盖，新编号不会继承它。依据仍适用且新稿仍需纠正分类时，在 `content/series-overrides.json` 的新 Issue 编号下添加系列与依据链接；新稿原始分类已正确时可以不添加。新编号已有覆盖时核实其内容，不能直接用旧覆盖替换。修改后重跑此命令，确认变更前后的有效分类。
+   此命令只报告原始系列、有效系列与分类覆盖，不修改文件或构建站点。核实是同一单集的修订稿；**新 Issue 不继承旧分类覆盖**。若依据仍适用且新稿仍需纠正，给新编号添加映射；已有新映射须先核实，不能直接覆盖。修改后重跑检查。
+3. 在同一 PR 中删除旧 `content/episodes/issue-<旧编号>.json` 及存在的同名分片目录，可一并移除旧分类覆盖。新旧记录同时保留会导致重复单集 ID 校验失败。
+4. 运行 `python3 scripts/build_public_site.py`，等待 `Community validation` 通过后合并，确认 Pages 部署成功。
 
-确认后，删除旧的 `content/episodes/issue-<旧编号>.json` 及存在的 `content/episodes/issue-<旧编号>/` 分片目录，可一并删除旧 Issue 的分类覆盖。将新增、删除和所需分类调整提交到同一个 PR 分支，运行 `python3 scripts/build_public_site.py` 并等待 `Community validation` 通过后合并。冻结投稿正文与 SHA-256 保持不变。
-
-同一单集保留原 `id`，直接同时收录新旧记录会触发重复 ID 校验失败。旧稿还未收录时，关闭旧 PR 即可。机器人不会因为评论或 Issue 正文变化而自动替换已固定内容。
+旧稿尚未收录时，关闭旧内容 PR 即可；机器人不会根据评论或 Issue 编辑自动替换固定快照。
 
 ## 撤稿与删除
 
-普通投稿人可在原 Issue 评论中申请撤稿，提供阅读链接；无法留言时另开 `[撤稿]` 普通 Issue。维护者核对请求与原投稿账号。当前没有自动撤稿按钮，也不会因评论、关闭或删除 Issue 而自动删除文章。
+投稿人在原 Issue 留言申请并附阅读链接；无法留言时另建 `[撤稿]` Issue。维护者先核对原投稿账号。关闭或删除 Issue 不会自动撤稿。
 
-**PR 尚未合并：** 关闭对应内容 PR，并关闭投稿 Issue，防止后续误合并。如果工作流仍在运行，处理完成后再检查是否生成了新的 PR。关闭 PR 表示不予收录，不等于抹除分支、PR 差异或附件。
+- **尚未合并**：关闭内容 PR 和投稿 Issue；若工作流仍在运行，结束后检查是否又生成 PR。
+- **已收录**：通过 PR 删除 `content/episodes/issue-<原投稿编号>.json` 及存在的同名分片目录，可同时清理分类覆盖。检查差异与 `Community validation`，通过后合并。
+- **确认下线**：等待 `Deploy community reader` 的 build、deploy 均成功，重新加载站点，确认目录、搜索、原阅读链接及 Markdown 下载均不再提供该稿，再回复原 Issue。部署失败时旧站仍可能可用。
 
-**PR 已合并或文稿已上线：** 以原分享 Issue `#17` 为例，维护者在 GitHub 网页执行：
-
-1. 打开仓库 `main` 下的 `content/episodes/issue-17.json`。这里使用原分享 Issue 编号，不是 PR 编号。
-2. 点击文件右上角菜单中的 **Delete file**。若存在同编号目录 `content/episodes/issue-17/`，同一 PR 中也删除该目录的全部分片。
-3. 提交说明填写撤稿原因，选择新建分支并创建 PR；确认差异只删除目标文稿记录。删除文件的网页操作见 [GitHub 说明](https://docs.github.com/en/repositories/working-with-files/managing-files/deleting-files-in-a-repository)。
-4. 等待 `Community validation` 通过，合并到 `main`。内容目录变更会自动触发 `Deploy community reader`。
-5. 等待 **build** 和 **deploy** 均成功，刷新站点，核对目录与搜索不再出现该文章，原阅读链接不能再打开正文，原站内下载链接不可再下载该稿。检查成功后回复原 Issue 说明已下线。
-
-构建器会从当前内容库重新生成目录和搜索索引，不再生成已撤稿的正文与下载；复用输出目录时，还会清理上一轮生成的相应文件。部署失败时，线上旧版本可能仍可访问，不能仅凭删除 PR 合并就报告已撤稿。已经打开的页面可能保留浏览器内存中的旧正文，需要重新加载检查。
-
-已撤稿后重新打开原分享 Issue，不会自动恢复文稿；脚本识别原先已关闭或合并的 PR，要求重新投稿。
+重新打开原分享 Issue 不会恢复已撤稿内容，需要重新投稿。
 
 ### 站点撤稿与彻底清理的区别
 
-| 位置 | 删除公开 JSON 并部署后的结果 |
-| --- | --- |
-| 当前 Pages 站点 | 目录、搜索、正文和站内 Markdown 下载移除。 |
-| 投稿人的本地文件 | 保留，由投稿人自行管理。 |
-| Issue、评论、附件、PR 差异与分支 | 不会自动删除，需要按具体位置分别处理。 |
-| Git 历史、旧 Actions 产物、他人的下载或克隆 | 不会被普通撤稿清除。 |
-
-本仓库属于个人账号，永久删除 Issue 需仓库所有者操作：打开 Issue，在右侧找到 **Delete issue** 并确认。这与关闭 Issue 不同，也不能替代删除内容记录。[GitHub Issue 删除说明](https://docs.github.com/en/issues/tracking-your-work-with-issues/administering-issues/deleting-an-issue)
-
-如果涉及误传隐私，先记录待处理的链接与位置，再核查 Git 历史、PR 引用、附件及部署产物。不要承诺删除附件链接或整个 Issue 就已删除附件存储。历史重写不是普通撤稿步骤；需要独立评估，必要时联系 GitHub 支持。GitHub 对支持范围和他人副本的限制见 [敏感数据清理说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)。
+撤稿只移除当前站点内容，不会清除 Issue、附件、PR、分支、Git 历史、旧部署产物或已下载副本。删除 Issue 也不能替代删除内容记录。隐私误传需按具体位置分别处理，参见 [GitHub 敏感数据清理说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)；不要承诺普通撤稿会彻底擦除数据。
 
 ## 工作流边界
 
-- `Community submission` 仅从 `main` 运行维护中的脚本。附件按 JSON 校验，下载请求不携带仓库 token，只接受 GitHub 附件、公开 Release JSON 资产及指定重定向存储地址；自动创建的提交只新增该 Issue 对应的内容文件与分片。每个 Git blob 不超过 4 MiB，写请求节流并按有限的 `Retry-After` 重试。
-- `Community validation` 在 PR 中只读运行校验、构建和测试，不部署。
-- `Deploy community reader` 只部署 `main` 中已合并的数据。无需数据库、常驻服务或浏览器端 GitHub token。
+| 工作流 | 职责 |
+| --- | --- |
+| `Community submission` | 使用 `main` 上的脚本校验并固定投稿，创建内容 PR；附件下载不携带仓库 token。 |
+| `Community validation` | 在 PR 中只读校验、构建和测试，不部署。 |
+| `Deploy community reader` | 仅部署 `main` 中已合并内容，无需数据库或常驻后端。 |
 
-超过 1 MiB 正文的大稿按约 256 KiB / 最多 200 段分页，不在首页、全文搜索索引或下载文件中重复存放全文；搜索界面明确此类稿件仅搜索元数据，完整 Markdown 在用户点击下载时逐页生成。构建先在临时目录生成并检查总量，超过 GitHub Pages 整站 1 GB 上限时失败且保留原输出。这是整站的平台限额，独立于 512 MiB 单稿接收上限；接近总量时需要减少内容库或迁移托管，不能仅提高单稿常量。
+单稿上限 **512 MiB**；超过 GitHub Issue 附件限制的文件使用公开 Release JSON 资产，步骤见[上传指引](../skills/podcast-scribe/references/sharing.md#4-上传并提交-issue)。大稿按页加载，站内仅搜索其元数据，下载 Markdown 时才获取全文。
 
-平台依据：[Issue 附件 25 MB](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files)、[Git 单文件 100 MiB](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github)、[Release 资产小于 2 GiB](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases)、[Pages 整站 1 GB](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)。
-
-配置依据：[Issue 表单](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-githubs-form-schema)、[Pages 自定义工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)、[GitHub token 与工作流触发](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。
+整站另有 **1 GB** 的 [GitHub Pages 限额](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)。构建超限会失败并保留原输出；接近上限时须减少内容或迁移托管，不能只提高单稿限制。
